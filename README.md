@@ -2,7 +2,7 @@
 
 **Le studio d'étiquettes de TAKATAK.** Un produit, son code-barres, son étiquette complète prête à imprimer, puis un essai de lecture au scanner. Premier client : MIEL AISSA.
 
-**Dépôt :** takatakca/SC4NNER · **État :** en ligne sur Coolify à une adresse provisoire depuis le 2026-11-12 ; compte de l'atelier, adresse définitive et essais d'impression à faire (voir `DEPLOY.md`).
+**Dépôt :** takatakca/SC4NNER · **En ligne :** https://sc4nner.takatak.ca (Coolify, depuis le 2026-11-12) ; une variable à corriger, compte de l'atelier, adresse définitive et essais d'impression à faire (voir `DEPLOY.md`).
 
 ## D'où vient ce code
 
