@@ -2,7 +2,7 @@
 
 **Le studio d'étiquettes de TAKATAK.** Un produit, son code-barres, son étiquette complète prête à imprimer, puis un essai de lecture au scanner. Premier client : MIEL AISSA.
 
-**Dépôt :** takatakca/SC4NNER · **État :** code vérifié en local, mise en ligne Coolify à faire (voir `DEPLOY.md`).
+**Dépôt :** takatakca/SC4NNER · **État :** code vérifié en local et par la CI, mise en ligne Coolify à faire (voir `DEPLOY.md`).
 
 ## D'où vient ce code
 
@@ -26,6 +26,8 @@ Le studio a été bâti le 2026-10-20 dans `takatakca/takatak-v1` (PR #218, fusi
 - Les 2 tests d'origine : connexion, témoin sécurisé, contrôle d'origine, séparation des espaces, déconnexion ; puis le formulaire complet dans un navigateur simulé (connexion, sauvegarde, rechargement, PDF, lecture du SKU).
 - Dans un vrai navigateur, en local (`npm run dev`) : connexion, aperçu en mode épreuve, refus de sauvegarder sans poids net, sauvegarde, puis étiquette relue après rechargement de la page.
 - Les 4 tests du serveur Node : pages et santé sur une vraie écoute HTTP, étiquettes relues après un redémarrage (base SQLite sur disque), blocage des mauvais mots de passe par adresse, connexion fermée (503) tant que le compte n'est pas configuré.
+
+- Sur GitHub (CI, run 43352787633, commit `b0aa8d3`) : mêmes contrôles, puis l'image Docker est construite, démarrée, et `/api/health` répond dans le conteneur.
 
 ## Ce qui n'est pas vérifié
 
