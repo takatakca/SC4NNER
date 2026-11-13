@@ -2,7 +2,7 @@
 
 **Le studio d'étiquettes de TAKATAK.** Un produit, son code-barres, son étiquette complète prête à imprimer, puis un essai de lecture au scanner. Premier client : MIEL AISSA.
 
-**Dépôt :** takatakca/SC4NNER · **État :** code vérifié en local et par la CI, mise en ligne Coolify à faire (voir `DEPLOY.md`).
+**Dépôt :** takatakca/SC4NNER · **État :** en ligne sur Coolify à une adresse provisoire depuis le 2026-11-12 ; compte de l'atelier, adresse définitive et essais d'impression à faire (voir `DEPLOY.md`).
 
 ## D'où vient ce code
 
@@ -32,7 +32,7 @@ Le studio a été bâti le 2026-10-20 dans `takatakca/takatak-v1` (PR #218, fusi
 ## Ce qui n'est pas vérifié
 
 - **L'impression réelle et la lecture réelle** : aucune imprimante, aucun scanner, aucun pot fini n'ont été essayés. C'est la prochaine étape du propriétaire.
-- **La mise en ligne** : rien n'est en ligne tant que `DEPLOY.md` n'est pas suivi dans Coolify.
+- **L'usage réel en ligne** : l'app répond et sa santé est verte, mais personne ne s'y est encore connecté. Le compte de l'atelier n'est pas configuré.
 - **La conformité** : l'app rappelle des exigences et note des vérifications déclarées. Elle ne certifie rien. Recette, poids, origine, dimensions et mentions sont à confirmer avant de vendre.
 
 ## Limites connues
