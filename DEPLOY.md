@@ -6,7 +6,7 @@ Comment SC4NNER tourne sur notre serveur, et ce qui reste à faire. Les agents n
 
 **En ligne :** `https://sc4nner.takatak.ca` (adresse choisie par le propriétaire). L'adresse provisoire `https://wrvtkwi27yopptbhidsbm3jn.31.220.96.134.sslip.io` répond encore.
 
-**À corriger avant tout usage :** `APP_BASE_URL` vaut encore l'adresse provisoire. Sur `sc4nner.takatak.ca`, la connexion et les sauvegardes sont donc refusées (403 « Origine refusée »). Voir l'étape 4.
+**Prochaine étape :** le compte de l'atelier (étape 2). Tant qu'il manque, la connexion répond 503.
 
 | Élément | État | Preuve |
 |---|---|---|
@@ -16,7 +16,7 @@ Comment SC4NNER tourne sur notre serveur, et ce qui reste à faire. Les agents n
 | Premier déploiement | Réussi, 1 min 10 s, commit `e7af841` | Journal Coolify : contrôle de santé « healthy » |
 | Santé, de l'extérieur | `/api/health` répond `{"ok":true,"database":"ready"}`, certificat valide | Lu le 2026-11-13 à 04:03 UTC |
 | Adresse définitive et DNS | Faits par le propriétaire : `sc4nner.takatak.ca` pointe vers vps1, le domaine est dans Coolify, certificat valide, http redirige vers https | `/api/health` 200 et `/api/release` (commit `7b95ce5`) lus sur cette adresse le 2026-11-13 |
-| **Variables** | **À corriger** : `APP_BASE_URL` vaut encore l'adresse provisoire ; `TRUSTED_PROXY_HOPS=1` est bon | Essai du 2026-11-13 : une écriture sur `sc4nner.takatak.ca` répond 403 « Origine refusée » |
+| Variables | `APP_BASE_URL=https://sc4nner.takatak.ca` et `TRUSTED_PROXY_HOPS=1`, puis redéploiement | Essai du 2026-11-13 : une écriture sur `sc4nner.takatak.ca` passe le contrôle d'origine (elle répond 503 « Compte non configuré », plus 403) ; une origine étrangère reste refusée (403) |
 | **Compte de l'atelier** | **Pas fait** : `/api/release` dit `"account":"not_configured"`, la connexion répond 503 | Étape 2, propriétaire |
 | Preuve du volume par une vraie étiquette | Pas faite (il faut le compte d'abord) | Étape 5, points 3 et 4 |
 | Essais d'impression | Pas faits | Étape 6 |
@@ -61,7 +61,7 @@ Le mot de passe est demandé au clavier et ne s'affiche pas. La commande donne t
 
 ## 4. Domaine et DNS — à faire ensemble
 
-L'adresse définitive est `https://sc4nner.takatak.ca`. Le DNS et le domaine Coolify sont faits. **Il reste :** dans Coolify, page Environment Variables de `sc4nner`, mettre `APP_BASE_URL=https://sc4nner.takatak.ca`, cliquer Redeploy, puis retirer l'adresse provisoire de la page Domains. Tant que `APP_BASE_URL` ne correspond pas à l'adresse utilisée, les sauvegardes sont refusées (« Origine refusée »).
+L'adresse définitive est `https://sc4nner.takatak.ca`. Le DNS et le domaine Coolify sont faits. `APP_BASE_URL` vaut `https://sc4nner.takatak.ca` depuis le 2026-11-13. **Il reste, sans urgence :** retirer l'adresse provisoire de la page Domains de `sc4nner`. Elle répond encore en lecture, mais toute écriture y est refusée. Tant que `APP_BASE_URL` ne correspond pas à l'adresse utilisée, les sauvegardes sont refusées (« Origine refusée »).
 
 Deux faits à connaître avant de décider :
 
