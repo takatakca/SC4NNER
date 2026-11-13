@@ -1,0 +1,42 @@
+name: SC4NNER CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Types, construction, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  image:
+    name: Image Docker et démarrage d'essai
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t sc4nner:ci .
+      - name: Démarrer le conteneur et lire la santé
+        run: |
+          docker run -d --name sc4nner -p 3000:3000 sc4nner:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3000/api/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3000/api/health | grep '"database":"ready"'
+          curl -fsS http://127.0.0.1:3000/api/release | grep '"name":"SC4NNER"'
+          curl -fsS http://127.0.0.1:3000/ | grep -q 'SC4NNER'
+          docker logs sc4nner
