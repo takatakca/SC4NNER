@@ -349,6 +349,24 @@ $("nutrition-file").onchange = async () => {
   }
 };
 configToForm();
+const authMessages: Record<string, string> = {
+  invalid:
+    "Ce lien de connexion n'est plus valide. Recommencez la connexion avec TAKATAK.",
+  refused:
+    "TAKATAK n'a pas confirmé cette connexion. Recommencez la connexion avec TAKATAK.",
+  not_configured:
+    "La connexion TAKATAK n'est pas encore configurée sur cet atelier.",
+};
+const authResult = new URLSearchParams(location.search).get("auth");
+if (authResult && authMessages[authResult]) {
+  $("login-error").textContent = authMessages[authResult];
+  history.replaceState(null, "", location.pathname);
+}
+void api<{ takatak?: string }>("release")
+  .then((r) => {
+    if (r.takatak === "ready") $("takatak-login").hidden = false;
+  })
+  .catch(() => undefined);
 void api<{ signedIn: boolean }>("session")
   .then((s) => (s.signedIn ? show() : null))
   .catch((e) => {

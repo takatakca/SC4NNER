@@ -9,6 +9,42 @@ const hex = (b) =>
   );
 const digest = async (v) =>
   hex(await crypto.subtle.digest("SHA-256", encoder.encode(v)));
+// base64url sans Buffer : même code sous Node et sous Cloudflare Workers.
+const b64url = (bytes) => {
+  let s = "";
+  const b = new Uint8Array(bytes);
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+};
+// Comparaison sans fuite de temps, même forme que la vérification du mot de passe.
+const safeEqualText = (a, b) => {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  let diff = a.length ^ b.length;
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++)
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+};
+// Une adresse TAKATAK V1 : https obligatoire, sauf localhost (essais en local).
+const httpsUrl = (raw) => {
+  try {
+    const u = new URL(raw);
+    if (u.username || u.password) return null;
+    if (u.protocol === "https:") return u;
+    if (
+      u.protocol === "http:" &&
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+    )
+      return u;
+  } catch {
+    /* pas une adresse */
+  }
+  return null;
+};
+const STATE_COOKIE = "__Host-sc4nner_state";
+const SESSION_COOKIE = "__Host-label_session";
+const STATE_RE = /^[A-Za-z0-9_-]{43}$/;
+const IDENTITY_RE = /^[A-Za-z0-9-]{8,64}$/;
 function response(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -45,8 +81,27 @@ export default {
       });
     if (path === "/robots.txt")
       return new Response("User-agent: *\nDisallow: /");
-    if (!path.startsWith("/api/"))
+    if (!path.startsWith("/api/") && !path.startsWith("/auth/"))
       return response({ error: "Introuvable" }, 404);
+    // Connexion TAKATAK V1 (même pont que BEH4VIOR) : l'inscription et
+    // l'identité restent chez TAKATAK ; ici on ne garde que la session.
+    const v1 = {
+      launch: httpsUrl(env.TAKATAK_SC4NNER_LAUNCH_URL || ""),
+      exchange: httpsUrl(env.TAKATAK_SC4NNER_EXCHANGE_URL || ""),
+      token: String(env.TAKATAK_SC4NNER_SERVICE_TOKEN || "").trim(),
+      product: String(env.SC4NNER_PRODUCT_CODE || "sc4nner").trim() || "sc4nner",
+      entitlement:
+        String(env.SC4NNER_ENTITLEMENT || "sc4nner_free").trim() ||
+        "sc4nner_free",
+    };
+    const v1Ready = Boolean(v1.launch && v1.exchange && v1.token.length >= 20);
+    const redirectTo = (to, cookies = []) => {
+      const headers = new Headers({ Location: to, ...security });
+      for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+      return new Response(null, { status: 303, headers });
+    };
+    const clearState = () =>
+      `${STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
     if (path === "/api/health" && req.method === "GET") {
       try {
         await env.DB.prepare("SELECT id FROM labels LIMIT 1").first();
@@ -73,19 +128,117 @@ export default {
       /(?:^|;\s*)__Host-label_session=([a-f0-9]{64})(?:;|$)/,
     )?.[1];
     const token = cookie ? await digest(cookie) : "";
-    const session = token
+    // Une session est forgée par le serveur seulement (connexion atelier ou
+    // échange TAKATAK V1) : le propriétaire est l'atelier ou une identité V1.
+    const sessionRow = token
       ? await env.DB.prepare(
-          "SELECT owner FROM sessions WHERE token=? AND owner=? AND expires>?",
+          "SELECT owner, display_name FROM sessions WHERE token=? AND expires>?",
         )
-          .bind(token, owner, Date.now())
+          .bind(token, Date.now())
           .first()
       : null;
+    const session =
+      sessionRow &&
+      (sessionRow.owner === owner || IDENTITY_RE.test(sessionRow.owner))
+        ? sessionRow
+        : null;
+    // Les étiquettes appartiennent à la personne connectée, pas à l'espace.
+    const sessionOwner = session ? session.owner : owner;
     try {
       if (path === "/api/session" && req.method === "GET")
         return response({
           signedIn: !!session,
-          username: session ? env.DEMO_USERNAME : null,
+          username: session
+            ? session.display_name || env.DEMO_USERNAME
+            : null,
+          via: session
+            ? session.owner === owner
+              ? "workshop"
+              : "takatak-v1"
+            : null,
         });
+      // Connexion TAKATAK V1 : /auth/start lance TAKATAK, /auth/callback
+      // échange le code unique contre une session. L'inscription se fait
+      // sur takatak.ca (mobile + code SMS) ; ici, on ne crée aucun compte.
+      if (path === "/auth/start" && req.method === "GET") {
+        if (!v1Ready)
+          return response(
+            { error: "Connexion TAKATAK non configurée." },
+            503,
+          );
+        const state = b64url(crypto.getRandomValues(new Uint8Array(32)));
+        const to = new URL(v1.launch);
+        to.searchParams.set("state", state);
+        return redirectTo(to.toString(), [
+          `${STATE_COOKIE}=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+        ]);
+      }
+      if (path === "/auth/callback" && req.method === "GET") {
+        if (!v1Ready) return redirectTo("/?auth=not_configured", [clearState()]);
+        const code = url.searchParams.get("code") || "";
+        const state = url.searchParams.get("state") || "";
+        const expected = (req.headers.get("Cookie") || "").match(
+          new RegExp(`(?:^|;\\s*)${STATE_COOKIE}=([A-Za-z0-9_-]+)(?:;|$)`),
+        )?.[1];
+        if (
+          !STATE_RE.test(code) ||
+          !STATE_RE.test(state) ||
+          !expected ||
+          !safeEqualText(state, expected)
+        )
+          return redirectTo("/?auth=invalid", [clearState()]);
+        let v1Session = null;
+        try {
+          const r = await fetch(v1.exchange, {
+            method: "POST",
+            signal: AbortSignal.timeout(8000),
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${v1.token}`,
+            },
+            body: JSON.stringify({ code }),
+          });
+          const j = r.ok ? await r.json() : null;
+          if (j && j.ok === true) v1Session = j.session;
+        } catch {
+          v1Session = null;
+        }
+        const until = v1Session ? Date.parse(v1Session.expiresAt) : NaN;
+        if (
+          !v1Session ||
+          v1Session.productCode !== v1.product ||
+          !Array.isArray(v1Session.entitlements) ||
+          !v1Session.entitlements.includes(v1.entitlement) ||
+          typeof v1Session.masterIdentityId !== "string" ||
+          !IDENTITY_RE.test(v1Session.masterIdentityId) ||
+          !(until > Date.now())
+        )
+          return redirectTo("/?auth=refused", [clearState()]);
+        const expires = Math.min(until, Date.now() + 12 * 60 * 60 * 1000);
+        const secret = hex(crypto.getRandomValues(new Uint8Array(32)));
+        const name =
+          typeof v1Session.displayName === "string"
+            ? v1Session.displayName.slice(0, 80)
+            : null;
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM sessions WHERE expires<?").bind(
+            Date.now(),
+          ),
+          env.DB.prepare(
+            "INSERT INTO sessions(token,owner,display_name,expires) VALUES(?,?,?,?)",
+          ).bind(
+            await digest(secret),
+            v1Session.masterIdentityId,
+            name,
+            expires,
+          ),
+        ]);
+        const maxAge = Math.max(1, Math.floor((expires - Date.now()) / 1000));
+        return redirectTo("/", [
+          clearState(),
+          `${SESSION_COOKIE}=${secret}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`,
+        ]);
+      }
       let body = null;
       if (req.method === "POST") {
         if (!req.headers.get("Content-Type")?.startsWith("application/json"))
@@ -171,7 +324,7 @@ export default {
         );
       if (path === "/api/logout" && req.method === "POST") {
         await env.DB.prepare("DELETE FROM sessions WHERE token=? AND owner=?")
-          .bind(token, owner)
+          .bind(token, session.owner)
           .run();
         return response({ ok: true }, 200, {
           "Set-Cookie":
@@ -182,7 +335,7 @@ export default {
         const { results } = await env.DB.prepare(
           "SELECT id,title,payload,version,updated_at FROM labels WHERE owner=? ORDER BY updated_at DESC LIMIT 200",
         )
-          .bind(owner)
+          .bind(sessionOwner)
           .all();
         return response({
           labels: results.map((x) => ({
@@ -230,7 +383,7 @@ export default {
           const result = await env.DB.prepare(
             "UPDATE labels SET title=?,payload=?,version=version+1,updated_at=? WHERE id=? AND owner=? AND version=?",
           )
-            .bind(body.title.trim(), value, now, id, owner, body.version)
+            .bind(body.title.trim(), value, now, id, sessionOwner, body.version)
             .run();
           if (!result.meta.changes)
             return response(
@@ -244,20 +397,20 @@ export default {
           const n = await env.DB.prepare(
             "SELECT count(*) AS total FROM labels WHERE owner=?",
           )
-            .bind(owner)
+            .bind(sessionOwner)
             .first();
           if (n.total >= 200)
             return response({ error: "Limite de 200 modèles atteinte." }, 409);
           await env.DB.prepare(
             "INSERT INTO labels(id,owner,title,payload,updated_at) VALUES(?,?,?,?,?)",
           )
-            .bind(id, owner, body.title.trim(), value, now)
+            .bind(id, sessionOwner, body.title.trim(), value, now)
             .run();
         }
         const saved = await env.DB.prepare(
           "SELECT id,version,updated_at FROM labels WHERE id=? AND owner=?",
         )
-          .bind(id, owner)
+          .bind(id, sessionOwner)
           .first();
         return response({ ok: true, ...saved });
       }
