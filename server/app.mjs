@@ -140,11 +140,37 @@ export function createApp({ dbPath, worker, env = process.env }) {
     DEMO_USERNAME: env.SC4NNER_USERNAME || env.DEMO_USERNAME,
     DEMO_SALT: env.SC4NNER_SALT || env.DEMO_SALT,
     DEMO_PASSWORD_HASH: env.SC4NNER_PASSWORD_HASH || env.DEMO_PASSWORD_HASH,
+    // Connexion TAKATAK V1 (même pont que BEH4VIOR) : les valeurs vivent
+    // dans Coolify, jamais dans Git. Voir docs/TAKATAK_V1_BRIDGE.md.
+    TAKATAK_SC4NNER_LAUNCH_URL: env.TAKATAK_SC4NNER_LAUNCH_URL,
+    TAKATAK_SC4NNER_EXCHANGE_URL: env.TAKATAK_SC4NNER_EXCHANGE_URL,
+    TAKATAK_SC4NNER_SERVICE_TOKEN: env.TAKATAK_SC4NNER_SERVICE_TOKEN,
+    SC4NNER_PRODUCT_CODE: env.SC4NNER_PRODUCT_CODE,
+    SC4NNER_ENTITLEMENT: env.SC4NNER_ENTITLEMENT,
   };
   const accountConfigured = Boolean(
     workerEnv.DEMO_USERNAME &&
       workerEnv.DEMO_SALT &&
       workerEnv.DEMO_PASSWORD_HASH,
+  );
+  // Même règle que le pont dans worker.mjs : https, sauf localhost en essai.
+  const takatakUrlOk = (raw) => {
+    try {
+      const u = new URL(raw || "");
+      if (u.username || u.password) return false;
+      if (u.protocol === "https:") return true;
+      return (
+        u.protocol === "http:" &&
+        (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+      );
+    } catch {
+      return false;
+    }
+  };
+  const takatakConfigured = Boolean(
+    takatakUrlOk(env.TAKATAK_SC4NNER_LAUNCH_URL) &&
+      takatakUrlOk(env.TAKATAK_SC4NNER_EXCHANGE_URL) &&
+      (env.TAKATAK_SC4NNER_SERVICE_TOKEN || "").trim().length >= 20,
   );
   const baseUrl = (env.APP_BASE_URL || "").replace(/\/+$/, "");
   const proxyHops = Math.max(0, Number(env.TRUSTED_PROXY_HOPS ?? 1) || 0);
@@ -187,6 +213,7 @@ export function createApp({ dbPath, worker, env = process.env }) {
           name: "SC4NNER",
           commit,
           account: accountConfigured ? "configured" : "not_configured",
+          takatak: takatakConfigured ? "ready" : "not_configured",
         });
 
       const isLogin = url.pathname === "/api/login" && method === "POST";
@@ -254,6 +281,7 @@ export function createApp({ dbPath, worker, env = process.env }) {
   return {
     server,
     accountConfigured,
+    takatakConfigured,
     close: () =>
       new Promise((resolve) => {
         server.close(() => {

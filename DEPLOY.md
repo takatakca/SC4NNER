@@ -18,6 +18,7 @@ Comment SC4NNER tourne sur notre serveur, et ce qui reste à faire. Les agents n
 | Adresse définitive et DNS | Faits par le propriétaire : `sc4nner.takatak.ca` pointe vers vps1, le domaine est dans Coolify, certificat valide, http redirige vers https | `/api/health` 200 et `/api/release` (commit `7b95ce5`) lus sur cette adresse le 2026-11-13 |
 | Variables | `APP_BASE_URL=https://sc4nner.takatak.ca` et `TRUSTED_PROXY_HOPS=1`, puis redéploiement | Essai du 2026-11-13 : une écriture sur `sc4nner.takatak.ca` passe le contrôle d'origine (elle répond 503 « Compte non configuré », plus 403) ; une origine étrangère reste refusée (403) |
 | **Compte de l'atelier** | **Pas fait** : `/api/release` dit `"account":"not_configured"`, la connexion répond 503 | Étape 2, propriétaire |
+| **Connexion TAKATAK V1** | **Code prêt, pas en service** : `/auth/start` + `/auth/callback` branchés sur V1 comme BEH4VIOR (inscription + connexion, une session par personne) ; il manque l'expérience `sc4nner` dans takatak-v1, les 3 variables Coolify et un redéploiement | `docs/TAKATAK_V1_BRIDGE.md`, étape 9 |
 | Preuve du volume par une vraie étiquette | Pas faite (il faut le compte d'abord) | Étape 5, points 3 et 4 |
 | Essais d'impression | Pas faits | Étape 6 |
 
@@ -100,6 +101,33 @@ Toutes les données sont dans le volume `/app/data` (fichier `sc4nner.db` et ses
 
 ## 8. Ce qui reste (code)
 
-- Brancher la connexion sur TAKATAK V1 (un compte par personne, plusieurs espaces).
+- ~~Brancher la connexion sur TAKATAK V1 (un compte par personne, plusieurs espaces).~~ Fait dans le code (PR) : `/auth/start` + `/auth/callback`, sessions par identité, étiquettes isolées par personne. Reste à faire côté propriétaire : voir étape 9.
 - Reprendre les modèles sauvegardés sur l'ancien hébergement, si on veut les garder.
 - Le verrou de connexion protège par adresse puis par espace : plusieurs adresses qui se trompent en même temps peuvent bloquer la connexion 15 minutes.
+
+## 9. Mettre la connexion TAKATAK en service (propriétaire)
+
+Le code est en place ; il faut encore deux gestes côté propriétaire,
+dans cet ordre :
+
+1. **Dans takatak-v1 (Matthieu)** : créer l'expérience `sc4nner`, copie
+   du pont BEH4VIOR (`docs/BEH4VIOR_BRIDGE.md` dans takatak-v1) :
+   routes `/api/experiences/sc4nner/launch` et `/exchange`, entrée
+   `/dashboard/sc4nner`, variables `TAKATAK_SC4NNER_URL`,
+   `SC4NNER_EXPERIENCE_CALLBACK_URL` (= `https://sc4nner.takatak.ca/auth/callback`)
+   et `TAKATAK_SC4NNER_SERVICE_TOKEN` (secret long, même valeur des
+   deux côtés). Confirmer le code produit (`sc4nner`) et le droit
+   (`sc4nner_free`) avant le premier essai.
+2. **Dans Coolify (app `sc4nner`)** : ajouter les variables
+   `TAKATAK_SC4NNER_LAUNCH_URL` (= `https://takatak.ca/api/experiences/sc4nner/launch`),
+   `TAKATAK_SC4NNER_EXCHANGE_URL` (= `https://takatak.ca/api/experiences/sc4nner/exchange`)
+   et `TAKATAK_SC4NNER_SERVICE_TOKEN` (même valeur que côté V1), puis
+   **Redeploy**.
+3. **Vérifier** : `https://sc4nner.takatak.ca/api/release` montre
+   `"takatak":"ready"`. Se connecter avec un compte TAKATAK de test,
+   créer une étiquette, **Sauvegarder**, se déconnecter, se reconnecter :
+   l'étiquette est encore là, et un deuxième compte test ne la voit pas.
+
+En attendant, le compte de l'atelier (étape 2) reste le repli : une
+fois ses trois variables posées et l'app redéployée, la connexion par
+nom d'utilisateur et mot de passe fonctionne pour ce compte unique.

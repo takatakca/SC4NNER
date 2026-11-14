@@ -12,6 +12,13 @@ export function fixture() {
       "utf8",
     ).replaceAll("--> statement-breakpoint", ""),
   );
+  // La colonne du nom d'affichage V1, comme la migration 0001 en production.
+  db.exec(
+    readFileSync(
+      new URL("../drizzle/0001_v1_display_name.sql", import.meta.url),
+      "utf8",
+    ),
+  );
   const DB = {
     prepare(sql) {
       let args = [];

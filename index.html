@@ -112,6 +112,17 @@
         color: white;
         border-color: #1565d8;
       }
+      a.btn {
+        display: block;
+        text-align: center;
+        text-decoration: none;
+        font: 600 14px system-ui;
+        border: 1px solid #1565d8;
+        border-radius: 9px;
+        padding: 11px 16px;
+        background: #1565d8;
+        color: white;
+      }
       button:disabled {
         opacity: 0.5;
         cursor: wait;
@@ -252,6 +263,16 @@
           ><button class="primary" type="submit">Se connecter</button>
           <p id="login-error" role="alert"></p>
         </form>
+        <div id="takatak-login" hidden>
+          <p class="muted" style="text-align: center; margin: 18px 0 10px">
+            ou
+          </p>
+          <a class="btn" href="/auth/start">Se connecter avec TAKATAK</a>
+          <small
+            >Pas encore de compte TAKATAK ? Il se crée sur takatak.ca avec
+            votre mobile et un code SMS — ensuite revenez ici.</small
+          >
+        </div>
         <small
           >Espace privé de démonstration. Ne pas y saisir de données
           sensibles.</small
