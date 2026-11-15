@@ -325,9 +325,18 @@ async function show() {
   $("app").hidden = false;
   $("logout").hidden = false;
   try {
-    const s = await api<{ role?: string | null }>("session");
+    const s = await api<{
+      role?: string | null;
+      email?: string | null;
+      username?: string | null;
+    }>("session");
     role =
       s.role === "admin" ? "admin" : s.role === "employee" ? "employee" : null;
+    // Le compte connecté s'affiche : le courriel du compte TAKATAK lié
+    // quand il y en a un, sinon le nom d'utilisateur de l'atelier.
+    const accountLabel = s.email || s.username || "";
+    $("account").textContent = accountLabel;
+    $("account").hidden = !accountLabel;
   } catch {
     role = null;
   }

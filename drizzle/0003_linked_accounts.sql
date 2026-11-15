@@ -1,0 +1,1 @@
+CREATE TABLE linked_accounts (master_identity_id TEXT PRIMARY KEY, email TEXT NOT NULL, display_name TEXT, product_code TEXT NOT NULL DEFAULT 'sc4nner', entitlement TEXT NOT NULL DEFAULT 'sc4nner_free', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);

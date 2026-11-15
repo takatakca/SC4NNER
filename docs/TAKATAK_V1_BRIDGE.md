@@ -103,3 +103,36 @@ La session renvoyée par l'échange dure 12 heures, comme BEH4VIOR : un
 compte désactivé perd l'accès à SC4NNER en 12 heures au plus. Le nom du
 droit (`sc4nner_free`) et le code produit (`sc4nner`) sont à confirmer
 côté V1 avant le premier essai réel.
+
+## Provisionnement des comptes liés (ajout du 2026-11-15, ordre du propriétaire)
+
+Constat du propriétaire (2026-11-15 10:51) : le flux arrivait à
+l'autorisation sans compte identifié, et `/api/release` répondait
+`account: not_configured` alors que le pont TAKATAK était prêt — ce
+champ ne parlait que du compte atelier (variables d'environnement),
+jamais des comptes TAKATAK. Le chaînon manquant est le
+**provisionnement** : quand un compte TAKATAK identifié autorise
+SC4NNER, V1 provisionne le compte lié ici, une fois, et l'échange
+transporte désormais le courriel de l'identité.
+
+- `POST /api/provision` (serveur à serveur, même jeton de service que
+  l'échange, comparaison à temps constant) : corps
+  `{ masterIdentityId, email, displayName? }`. Crée ou met à jour le
+  lien local dans `linked_accounts` (migration 0003) et répond
+  `{ ok:true, provisioned:true, created }`. **Idempotent.** Ce lien
+  n'est pas un annuaire : ni mot de passe, ni inscription, ni CRM —
+  l'identité reste chez TAKATAK V1 (règle du dépôt).
+- Le callback d'échange alimente le même lien quand la session
+  échangée porte un courriel valide (auto-réparation si l'appel de
+  provisionnement a été manqué).
+- `GET /api/session` renvoie en plus `email` : le courriel du compte
+  TAKATAK lié à la session (null pour l'atelier ou si aucun lien) ;
+  l'en-tête du studio l'affiche comme compte connecté.
+- `GET /api/release` reflète l'état réel : `account` vaut `configured`
+  si le compte atelier existe OU si au moins un compte TAKATAK est
+  lié ; `linkedAccounts` donne le nombre de comptes liés.
+
+Côté V1 (PR compagnon) : l'autorisation devient explicite (page qui
+affiche le compte — courriel — avec changement de compte possible,
+avant tout code), l'enregistrement « fournisseur » est créé dans la
+base principale V1 (source `sc4nner`), puis V1 appelle `/api/provision`.

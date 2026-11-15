@@ -211,13 +211,31 @@ export function createApp({ dbPath, worker, env = process.env }) {
       const url = new URL(req.url || "/", origin);
       const method = req.method || "GET";
 
-      if (url.pathname === "/api/release" && method === "GET")
+      if (url.pathname === "/api/release" && method === "GET") {
+        // État réel des comptes : le compte atelier (variables d'env.) OU
+        // au moins un compte TAKATAK lié provisionné (table linked_accounts,
+        // migration 0003) rendent « account » configuré ; le compteur dit
+        // combien de comptes TAKATAK sont liés à ce déploiement.
+        let linkedAccounts = 0;
+        try {
+          linkedAccounts = Number(
+            db.prepare("SELECT COUNT(*) AS n FROM linked_accounts").get()?.n ||
+              0,
+          );
+        } catch {
+          linkedAccounts = 0;
+        }
         return json(res, 200, {
           name: "SC4NNER",
           commit,
-          account: accountConfigured ? "configured" : "not_configured",
+          account:
+            accountConfigured || linkedAccounts > 0
+              ? "configured"
+              : "not_configured",
+          linkedAccounts,
           takatak: takatakConfigured ? "ready" : "not_configured",
         });
+      }
 
       const isLogin = url.pathname === "/api/login" && method === "POST";
       const ip = clientIp(req);

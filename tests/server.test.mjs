@@ -126,6 +126,7 @@ test("pages, santé, version et espace privé sans connexion", async () => {
       name: "SC4NNER",
       commit: null,
       account: "configured",
+      linkedAccounts: 0,
       takatak: "not_configured",
     });
     assert.equal((await call("/api/labels")).status, 401);
@@ -288,6 +289,7 @@ test("connexion TAKATAK : lancement, échange, session et isolement par identit�
     assert.deepEqual(await (await call("/api/session", { cookie })).json(), {
       signedIn: true,
       username: "Testeur A",
+      email: null,
       via: "takatak-v1",
       role: "employee",
     });
@@ -333,6 +335,7 @@ test("connexion TAKATAK : lancement, échange, session et isolement par identit�
     assert.deepEqual(await (await call("/api/session", { cookie: wcookie })).json(), {
       signedIn: true,
       username: "essai",
+      email: null,
       via: "workshop",
       role: "admin",
     });
