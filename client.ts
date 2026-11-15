@@ -18,7 +18,42 @@ type SavedLabel = {
   id: string;
   version: number;
   title: string;
-  payload: { product: LabelProduct; config: LabelConfig };
+  payload: {
+    product: LabelProduct;
+    config: LabelConfig;
+    inventory?: InventoryLink | null;
+  };
+};
+// Lien vers un produit de l'inventaire TAKATAK (V1) : l'étiquette part du
+// produit réel, son SKU et son code UPC/EAN sont ceux de l'inventaire.
+type InventoryLink = {
+  productId: string;
+  clientId: string;
+  businessBrandId: string;
+  brandName: string;
+  name: string;
+  sku: string;
+  gtin: string | null;
+  category: string;
+};
+type InventoryProduct = {
+  id: string;
+  businessBrandId: string;
+  name: string;
+  sku: string;
+  category: string;
+  size: string;
+  ingredients: string;
+  gtin: string | null;
+  priceCents: number;
+  quantity: number;
+  threshold: number;
+};
+type InventoryWorkspace = {
+  clientId: string;
+  clientName: string;
+  brands: { id: string; name: string }[];
+  products: InventoryProduct[];
 };
 const errorMessage = (e: unknown) =>
   e instanceof Error ? e.message : "Action impossible. Réessayez.";
@@ -27,6 +62,8 @@ let config = mielAissaLabelConfig(),
   revision = 0,
   current: { id: string; version: number } | null = null,
   records: SavedLabel[] = [],
+  inventoryLink: InventoryLink | null = null,
+  inventoryCatalog: InventoryWorkspace[] = [],
   role: "admin" | "employee" | null = null;
 config.heightMm = 80;
 config.origin = "";
@@ -77,10 +114,10 @@ const escape = (v: unknown) =>
   );
 function product() {
   return {
-    id: "label",
-    businessBrandId: "label",
+    id: inventoryLink?.productId ?? "label",
+    businessBrandId: inventoryLink?.businessBrandId ?? "label",
     name: $("nameFr").value,
-    category: "Honey",
+    category: inventoryLink?.category ?? "Honey",
     sku: $("sku").value.trim().toUpperCase(),
     size: $("size").value.trim() || "Poids à confirmer",
     ingredients: $("ingredientsFr").value,
@@ -239,6 +276,50 @@ async function load() {
   }
   if (current) select.value = current.id;
 }
+async function loadInventory() {
+  const block = $("inventory-import");
+  try {
+    const data = await api<{
+      linked: boolean;
+      workspaces: InventoryWorkspace[];
+    }>("inventory/products");
+    inventoryCatalog = data.linked ? data.workspaces : [];
+  } catch {
+    inventoryCatalog = [];
+  }
+  const select = $("inventory-product");
+  select.innerHTML =
+    '<option value="">Choisir un produit de l’inventaire…</option>';
+  for (const workspace of inventoryCatalog) {
+    const brandName = (id: string) =>
+      workspace.brands.find((b) => b.id === id)?.name ?? "";
+    const groups = new Map<string, InventoryProduct[]>();
+    for (const p of workspace.products) {
+      const key = brandName(p.businessBrandId);
+      groups.set(key, [...(groups.get(key) ?? []), p]);
+    }
+    for (const [brand, products] of groups) {
+      const group = document.createElement("optgroup");
+      group.label = brand
+        ? `${workspace.clientName} — ${brand}`
+        : workspace.clientName;
+      for (const p of products) {
+        const opt = document.createElement("option");
+        opt.value = `${workspace.clientId}|${p.id}`;
+        opt.textContent = `${p.name} — ${p.size} (SKU ${p.sku}) · en stock : ${p.quantity}`;
+        group.append(opt);
+      }
+      select.append(group);
+    }
+  }
+  block.hidden = inventoryCatalog.length === 0;
+  showInventoryLink();
+}
+function showInventoryLink() {
+  $("inventory-status").textContent = inventoryLink
+    ? `Étiquette liée à l’inventaire TAKATAK : ${inventoryLink.name} (SKU ${inventoryLink.sku}). Changer le SKU ou le code UPC/EAN à la main retire le lien.`
+    : "";
+}
 async function show() {
   $("login").hidden = true;
   $("app").hidden = false;
@@ -252,6 +333,7 @@ async function show() {
   }
   $("admin-settings").hidden = role !== "admin";
   await load();
+  await loadInventory();
   await preview();
 }
 $("login-form").addEventListener("submit", async (e) => {
@@ -277,8 +359,60 @@ $("logout").onclick = async () => {
     $("messages").textContent = errorMessage(e);
   }
 };
+$("inventory-use").onclick = () => {
+  const [clientId, productId] = $("inventory-product").value.split("|");
+  const workspace = inventoryCatalog.find((w) => w.clientId === clientId);
+  const found = workspace?.products.find((p) => p.id === productId);
+  if (!workspace || !found) {
+    $("messages").textContent =
+      "Choisissez d’abord un produit de l’inventaire.";
+    return;
+  }
+  const brandName =
+    workspace.brands.find((b) => b.id === found.businessBrandId)?.name ?? "";
+  if (brandName) $("brand").value = brandName;
+  $("nameFr").value = found.name;
+  $("ingredientsFr").value = found.ingredients;
+  $("size").value = found.size;
+  $("sku").value = found.sku;
+  $("gtin").value = found.gtin ?? "";
+  inventoryLink = {
+    productId: found.id,
+    clientId: workspace.clientId,
+    businessBrandId: found.businessBrandId,
+    brandName,
+    name: found.name,
+    sku: found.sku,
+    gtin: found.gtin,
+    category: found.category,
+  };
+  // Comme une saisie manuelle : les confirmations repartent à vérifier.
+  config.gs1Confirmed = false;
+  config.textReviewed = false;
+  $("gs1Confirmed").checked = false;
+  $("textReviewed").checked = false;
+  for (const r of quebecRequirements)
+    config.quebec.items[r.key].status = "pending";
+  renderReviews();
+  showInventoryLink();
+  $("messages").textContent =
+    "Produit de l’inventaire chargé. Vérifiez les mentions, puis sauvegardez.";
+  void preview();
+};
 $("editor").addEventListener("input", (event) => {
   const target = event.target as HTMLInputElement;
+  if (
+    inventoryLink &&
+    ((target.id === "sku" &&
+      $("sku").value.trim().toUpperCase() !==
+        inventoryLink.sku.toUpperCase()) ||
+      (target.id === "gtin" &&
+        $("gtin").value.trim() !== (inventoryLink.gtin ?? "")))
+  ) {
+    // Le code ne vient plus de l'inventaire : le lien ne tient plus.
+    inventoryLink = null;
+    showInventoryLink();
+  }
   if (
     [
       "brand",
@@ -325,7 +459,7 @@ $("save").onclick = async () => {
       id: current?.id,
       version: current?.version,
       title: `${config.brand} — ${p.name} — ${p.size}`,
-      payload: { product: p, config },
+      payload: { product: p, config, inventory: inventoryLink },
     });
     current = result;
     await load();
@@ -344,9 +478,11 @@ $("saved").onchange = () => {
   if (!r) return;
   current = r;
   config = readLabelConfig(r.payload.config, "MIEL AISSA");
+  inventoryLink = r.payload.inventory ?? null;
   configToForm();
   for (const f of ["sku", "size", "gtin"] as const)
     $(f).value = r.payload.product[f] || "";
+  showInventoryLink();
   void preview();
 };
 $("new").onclick = () => {
@@ -354,11 +490,13 @@ $("new").onclick = () => {
   config = mielAissaLabelConfig();
   config.origin = "";
   config.heightMm = 80;
+  inventoryLink = null;
   configToForm();
   $("size").value = "";
   $("gtin").value = "";
   $("sku").value = "AISSA";
   $("saved").value = "";
+  showInventoryLink();
   $("messages").textContent = "";
   void preview();
 };

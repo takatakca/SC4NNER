@@ -131,3 +131,14 @@ dans cet ordre :
 En attendant, le compte de l'atelier (étape 2) reste le repli : une
 fois ses trois variables posées et l'app redéployée, la connexion par
 nom d'utilisateur et mot de passe fonctionne pour ce compte unique.
+
+## 10. Lien inventaire TAKATAK (2026-11-14)
+
+Le studio peut partir d'un produit de l'inventaire TAKATAK de V1
+(catalogue lu serveur à serveur, voir `docs/TAKATAK_V1_BRIDGE.md`).
+**Aucune variable nouvelle à poser** : l'adresse du catalogue est
+déduite de `TAKATAK_SC4NNER_EXCHANGE_URL`. Il faut seulement que V1
+serve la route `POST /api/experiences/sc4nner/inventory` (PR compagnon
+dans takatak-v1) et que les deux apps soient redéployées après fusion
+des deux PR. La variable optionnelle `TAKATAK_SC4NNER_INVENTORY_URL`
+ne sert que si V1 publie le catalogue à une autre adresse.
