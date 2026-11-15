@@ -1,6 +1,9 @@
 import html from "./index.html";
 import client from "./dist/client.js";
-import { labelConfigInput } from "./src/label-config.ts";
+import {
+  labelConfigInput,
+  labelReadiness,
+} from "./src/label-config.ts";
 import { normalizeGtin } from "./src/validation.ts";
 const encoder = new TextEncoder();
 const hex = (b) =>
@@ -15,6 +18,23 @@ const b64url = (bytes) => {
   const b = new Uint8Array(bytes);
   for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
   return btoa(s).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+};
+// PBKDF2 comme la vérification du mot de passe de l'atelier (100 000 tours).
+const pbkdf2Hex = async (secret, salt) => {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  return hex(
+    await crypto.subtle.deriveBits(
+      { name: "PBKDF2", salt: encoder.encode(salt), iterations: 100000, hash: "SHA-256" },
+      key,
+      256,
+    ),
+  );
 };
 // Comparaison sans fuite de temps, même forme que la vérification du mot de passe.
 const safeEqualText = (a, b) => {
@@ -173,6 +193,13 @@ export default {
             ? session.owner === owner
               ? "workshop"
               : "takatak-v1"
+            : null,
+          // Rôles du studio : le propriétaire du compte atelier est le
+          // directeur (admin) ; une identité TAKATAK V1 est un employé.
+          role: session
+            ? session.owner === owner
+              ? "admin"
+              : "employee"
             : null,
         });
       // Connexion TAKATAK V1 : /auth/start lance TAKATAK, /auth/callback
@@ -390,6 +417,29 @@ export default {
         } catch {
           return response({ error: "Configuration invalide." }, 400);
         }
+        // Les contournements consignés ne changent que par l'endpoint dédié
+        // (/api/labels/override) : une sauvegarde ordinaire conserve ceux de
+        // la version stockée et ne peut ni en forger ni en effacer.
+        if (body.id) {
+          const existing = await env.DB.prepare(
+            "SELECT payload FROM labels WHERE id=? AND owner=?",
+          )
+            .bind(body.id, sessionOwner)
+            .first();
+          let kept = [];
+          if (existing) {
+            try {
+              kept = labelConfigInput(
+                JSON.parse(existing.payload).config,
+              ).overrides;
+            } catch {
+              kept = [];
+            }
+          }
+          body.payload.config.overrides = kept;
+        } else {
+          body.payload.config.overrides = [];
+        }
         const id = body.id || crypto.randomUUID();
         if (!/^[a-f0-9-]{36}$/.test(id))
           return response({ error: "Identifiant invalide." }, 400);
@@ -481,6 +531,151 @@ export default {
             ? { reason: upstream.reason }
             : {}),
           workspaces: upstream.workspaces,
+        });
+      }
+      // Code maître d'override : seul le directeur (compte atelier) le crée
+      // ou le change. Il est conservé haché (PBKDF2 + sel), jamais en clair,
+      // et n'est jamais renvoyé par l'API.
+      if (path === "/api/override-code" && req.method === "POST") {
+        if (session.owner !== owner)
+          return response(
+            { error: "Réservé au directeur (compte atelier)." },
+            403,
+          );
+        const code = typeof body.code === "string" ? body.code : "";
+        if (!/^\d{4}$/.test(code))
+          return response(
+            { error: "Le code maître doit compter exactement 4 chiffres." },
+            400,
+          );
+        const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+        const hash = await pbkdf2Hex(code, salt);
+        await env.DB.prepare(
+          "INSERT INTO settings(key,value) VALUES('override_code',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
+          .bind(JSON.stringify({ salt, hash }))
+          .run();
+        return response({ ok: true });
+      }
+      // Contournement autorisé d'un prérequis bloquant, consigné avec
+      // l'étiquette : directeur = note écrite obligatoire ; employé = code
+      // maître vérifié ici, côté serveur. Le prérequis n'est pas effacé : il
+      // est marqué « contourné avec autorisation » dans le modèle.
+      if (path === "/api/labels/override" && req.method === "POST") {
+        const id = typeof body.id === "string" ? body.id : "";
+        const issue =
+          typeof body.issue === "string" ? body.issue.trim() : "";
+        if (!/^[a-f0-9-]{36}$/.test(id) || !issue || issue.length > 300)
+          return response({ error: "Contournement invalide." }, 400);
+        const row = await env.DB.prepare(
+          "SELECT payload,version FROM labels WHERE id=? AND owner=?",
+        )
+          .bind(id, sessionOwner)
+          .first();
+        if (!row) return response({ error: "Étiquette introuvable." }, 404);
+        let payload;
+        try {
+          payload = JSON.parse(row.payload);
+          payload.config = labelConfigInput(payload.config);
+        } catch {
+          return response({ error: "Configuration invalide." }, 400);
+        }
+        const config = payload.config;
+        if (!labelReadiness(payload.product, config).includes(issue))
+          return response(
+            { error: "Ce prérequis ne bloque pas cette étiquette." },
+            400,
+          );
+        if (config.overrides.some((o) => o.issue === issue))
+          return response(
+            { error: "Prérequis déjà contourné avec autorisation." },
+            409,
+          );
+        const note = typeof body.note === "string" ? body.note.trim() : "";
+        if (note.length > 600)
+          return response({ error: "Note trop longue." }, 400);
+        const username = session.display_name || env.DEMO_USERNAME || "";
+        const role = session.owner === owner ? "admin" : "employee";
+        let entry;
+        if (role === "admin") {
+          if (!note)
+            return response(
+              {
+                error:
+                  "Le directeur doit écrire une note qui justifie le contournement.",
+              },
+              400,
+            );
+          entry = {
+            issue,
+            by: username,
+            role,
+            method: "note",
+            note,
+            at: new Date().toISOString(),
+          };
+        } else {
+          const code = typeof body.code === "string" ? body.code : "";
+          if (!/^\d{4}$/.test(code))
+            return response(
+              { error: "Code maître à 4 chiffres requis." },
+              400,
+            );
+          let stored = null;
+          try {
+            stored = await env.DB.prepare(
+              "SELECT value FROM settings WHERE key='override_code'",
+            ).first();
+          } catch {
+            stored = null;
+          }
+          if (!stored)
+            return response(
+              {
+                error:
+                  "Aucun code maître n'a été créé. Le directeur doit d'abord le définir dans les réglages du studio.",
+              },
+              403,
+            );
+          let parsed = null;
+          try {
+            parsed = JSON.parse(stored.value);
+          } catch {
+            parsed = null;
+          }
+          const hash = parsed ? await pbkdf2Hex(code, parsed.salt) : "";
+          if (!parsed || !safeEqualText(hash, String(parsed.hash || "")))
+            return response({ error: "Code maître incorrect." }, 403);
+          entry = {
+            issue,
+            by: username,
+            role,
+            method: "code",
+            note,
+            at: new Date().toISOString(),
+          };
+        }
+        config.overrides = [...config.overrides, entry];
+        const value = JSON.stringify(payload);
+        if (value.length > 600000)
+          return response({ error: "Étiquette trop volumineuse." }, 413);
+        const result = await env.DB.prepare(
+          "UPDATE labels SET payload=?,version=version+1,updated_at=? WHERE id=? AND owner=? AND version=?",
+        )
+          .bind(value, new Date().toISOString(), id, sessionOwner, row.version)
+          .run();
+        if (!result.meta.changes)
+          return response(
+            {
+              error:
+                "Cette étiquette a changé. Rechargez-la avant de sauvegarder.",
+            },
+            409,
+          );
+        return response({
+          ok: true,
+          version: row.version + 1,
+          overrides: config.overrides,
         });
       }
       return response({ error: "Introuvable" }, 404);

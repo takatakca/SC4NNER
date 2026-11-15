@@ -6,6 +6,33 @@ import {
   quebecReviewIssues,
   type QuebecReview,
 } from "./quebec-requirements";
+/**
+ * Mention d'ingrédient unique du miel pur. Le panneau imprime déjà l'en-tête
+ * bilingue « Ingrédients / Ingredients »; avec ce texte, la mention complète
+ * lue sur l'étiquette est « Ingrédients : Miel / Ingredients: Honey ».
+ * Le miel pur est un aliment à ingrédient unique et ne périme pas : le preset
+ * miel remplit cette mention et active l'option sans date d'expiration. Il ne
+ * dispense d'aucune autre vérification (GS1, poids net, adresse, origine,
+ * valeur nutritive ou exemption, lot, dossier Québec).
+ */
+export const HONEY_SINGLE_INGREDIENT_FR = "Miel / Honey";
+/**
+ * Contournement autorisé d'un prérequis bloquant, consigné avec l'étiquette.
+ * Le prérequis n'est jamais effacé : il est marqué « contourné avec
+ * autorisation » et l'entrée reste visible dans le modèle sauvegardé.
+ * Directeur (admin) : note écrite obligatoire. Employé : code maître à
+ * 4 chiffres vérifié côté serveur (méthode « code », le code n'est jamais
+ * consigné). Les entrées ne peuvent être créées que par l'endpoint serveur
+ * dédié ; une sauvegarde ordinaire ne peut ni en ajouter ni en retirer.
+ */
+export type LabelOverride = {
+  issue: string;
+  by: string;
+  role: "admin" | "employee";
+  method: "note" | "code";
+  note: string;
+  at: string;
+};
 export type LabelConfig = {
   version: 1;
   widthMm: number;
@@ -28,6 +55,12 @@ export type LabelConfig = {
   notes: string;
   lot: string;
   bestBefore: string;
+  logoImage: string;
+  logoRatio: number;
+  logoWidthMm: number;
+  honeyPreset: boolean;
+  noBestBefore: boolean;
+  overrides: LabelOverride[];
   nutritionImage: string;
   nutritionRatio: number;
   nutritionWidthMm: number;
@@ -71,6 +104,12 @@ export function defaultLabelConfig(brand = ""): LabelConfig {
     notes: "",
     lot: "",
     bestBefore: "",
+    logoImage: "",
+    logoRatio: 1,
+    logoWidthMm: 30,
+    honeyPreset: false,
+    noBestBefore: false,
+    overrides: [],
     nutritionImage: "",
     nutritionRatio: 1.5,
     nutritionWidthMm: 40,
@@ -173,6 +212,87 @@ export function labelConfigInput(value: unknown): LabelConfig {
       );
     result[key] = text.trim();
   }
+  const logo = b.logoImage ?? "";
+  if (
+    typeof logo !== "string" ||
+    logo.length > 450000 ||
+    (logo && !/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(logo))
+  )
+    throw new ServiceError(
+      "invalid_input",
+      "Logo artwork must be a PNG/JPEG under 300 KB.",
+    );
+  result.logoImage = logo;
+  const logoRatio = b.logoRatio ?? 1;
+  if (
+    typeof logoRatio !== "number" ||
+    !Number.isFinite(logoRatio) ||
+    logoRatio < 0.1 ||
+    logoRatio > 10
+  )
+    throw new ServiceError(
+      "invalid_input",
+      "Logo image proportions are unsupported.",
+    );
+  result.logoRatio = logoRatio;
+  const logoWidth = b.logoWidthMm ?? 30;
+  if (
+    typeof logoWidth !== "number" ||
+    !Number.isFinite(logoWidth) ||
+    logoWidth < 10 ||
+    logoWidth > 80
+  )
+    throw new ServiceError(
+      "invalid_input",
+      "Logo width must be between 10 and 80 mm.",
+    );
+  result.logoWidthMm = logoWidth;
+  result.honeyPreset = b.honeyPreset === true;
+  result.noBestBefore = b.noBestBefore === true;
+  const rawOverrides = b.overrides ?? [];
+  if (!Array.isArray(rawOverrides) || rawOverrides.length > 100)
+    throw new ServiceError(
+      "invalid_input",
+      "Les contournements consignés sont invalides.",
+    );
+  result.overrides = rawOverrides.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry))
+      throw new ServiceError(
+        "invalid_input",
+        "Contournement consigné invalide.",
+      );
+    const o = entry as Record<string, unknown>;
+    const text = (v: unknown, max: number) => {
+      if (
+        typeof v !== "string" ||
+        v.length > max ||
+        /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(v)
+      )
+        throw new ServiceError(
+          "invalid_input",
+          "Contournement consigné invalide.",
+        );
+      return v.trim();
+    };
+    if (o.role !== "admin" && o.role !== "employee")
+      throw new ServiceError(
+        "invalid_input",
+        "Contournement consigné invalide.",
+      );
+    if (o.method !== "note" && o.method !== "code")
+      throw new ServiceError(
+        "invalid_input",
+        "Contournement consigné invalide.",
+      );
+    return {
+      issue: text(o.issue, 300),
+      by: text(o.by, 160),
+      role: o.role,
+      method: o.method,
+      note: text(o.note, 600),
+      at: text(o.at, 40),
+    };
+  });
   const image = b.nutritionImage ?? "";
   if (
     typeof image !== "string" ||
@@ -307,6 +427,11 @@ export function mielAissaLabelConfig(): LabelConfig {
     ...defaultLabelConfig("MIEL AISSA"),
     theme: "honey",
     nameFr: "Miel",
+    // Le produit de départ est un miel pur : preset miel appliqué (ingrédient
+    // unique standard, pas de date d'expiration). Modifiable dans le studio.
+    honeyPreset: true,
+    noBestBefore: true,
+    ingredientsFr: HONEY_SINGLE_INGREDIENT_FR,
     business: "MIEL AISSA\n5837 Rue Jean-Talon E\nH1S 1M4\nMIELAISSA.CA",
     origin: "Produit du Québec",
   };
