@@ -34,3 +34,7 @@ Le module du tableau de bord n'est pas copié ici, parce qu'il dépend de la con
 - Tests : `scripts/inventory-tests.ts`, `scripts/inventory-label-tests.ts`, `scripts/inventory-db-tests.ts`.
 
 La PR #218 indique que ces deux migrations n'ont été appliquées que sur une base locale jetable. Leur application sur la base hébergée de V1 relève du coordinateur de publication de V1.
+
+## Divergence du moteur d'étiquettes (2026-11-14)
+
+Le moteur `src/` de ce dépôt a évolué sans report dans `takatak-v1/src/lib/inventory` (ordre du propriétaire : ne pas toucher takatak-v1 dans cette passe) : champs de configuration `logoImage` / `logoRatio` / `logoWidthMm` (logo d'entreprise imprimé sur le panneau avant), preset miel pur (`honeyPreset`, `noBestBefore`, mention d'ingrédient unique « Miel / Honey »), et contournements de prérequis consignés au modèle (`overrides`, créés uniquement par l'endpoint serveur dédié, jamais par une sauvegarde ordinaire). À reporter dans V1 lors d'une passe dédiée, si le propriétaire le demande.

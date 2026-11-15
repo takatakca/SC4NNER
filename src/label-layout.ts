@@ -61,6 +61,8 @@ export type LabelScene = {
   draft: boolean;
   elements: LabelElement[];
   issues: string[];
+  /** Prérequis contournés avec autorisation (consignés au modèle). */
+  overridden: string[];
   flatFaceFit?: { requiredWidthMm: number; measuredWidthMm: number };
   minimumDeclarationHeightMm: number;
 };
@@ -101,7 +103,14 @@ export async function buildLabelScene(
 ): Promise<LabelScene> {
   const config = labelConfigInput(value);
   const font = await metrics();
-  const issues = labelReadiness(product, config);
+  // Un prérequis contourné avec autorisation reste consigné (scene.overridden)
+  // mais ne bloque plus l'état « prêt » ; tous les autres continuent de
+  // bloquer exactement comme avant.
+  const allIssues = labelReadiness(product, config);
+  const overridden = allIssues.filter((issue) =>
+    config.overrides.some((o) => o.issue === issue),
+  );
+  const issues = allIssues.filter((issue) => !overridden.includes(issue));
   const draft = issues.length > 0;
   const scene: LabelScene = {
     width: config.widthMm,
@@ -109,6 +118,7 @@ export async function buildLabelScene(
     seamMm: config.seamMm,
     draft,
     issues,
+    overridden,
     elements: [],
     minimumDeclarationHeightMm: minimumDeclarationHeightMm(
       config.principalDisplayAreaCm2,
@@ -308,6 +318,29 @@ export async function buildLabelScene(
   if (config.origin) iy = addText(config.origin, infoX, iy + 1, infoWidth, 3.1);
   if (config.notes) addText(config.notes, infoX, iy + 1, infoWidth, 2.8);
   let fy = top + 1;
+  if (config.logoImage) {
+    // Logo de l'entreprise, centré en haut du panneau avant, au-dessus de la
+    // marque. Il ne touche ni au code-barres (panneau séparé) ni aux mentions
+    // (panneau d'information séparé).
+    const logoWidth = Math.min(config.logoWidthMm, frontWidth);
+    const logoHeight = logoWidth / config.logoRatio;
+    if (
+      config.jarShape === "hexagonal" &&
+      logoWidth + 4 > config.flatFaceWidthMm
+    )
+      throw new Error(
+        "Le logo doit tenir sur une face plane du pot hexagonal. Sa largeur, avec 2 mm de marge d’application de chaque côté, dépasse la face plane mesurée. Réduisez la largeur du logo ou mesurez une face plus large; ne pas le plier sur un coin.",
+      );
+    scene.elements.push({
+      kind: "image",
+      x: frontX + (frontWidth - logoWidth) / 2,
+      y: fy,
+      width: logoWidth,
+      height: logoHeight,
+      data: config.logoImage,
+    });
+    fy += logoHeight + 2;
+  }
   fy = addText(
     config.brand || "YOUR HONEY BRAND",
     frontX,
@@ -416,7 +449,7 @@ export async function buildLabelScene(
       barcodePanelWidth,
       2.7,
     );
-  if (config.bestBefore)
+  if (config.bestBefore && !config.noBestBefore)
     addText(
       `Best before / Meilleur avant: ${config.bestBefore}`,
       barcodePanelX,
