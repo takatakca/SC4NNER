@@ -148,6 +148,9 @@ export function createApp({ dbPath, worker, env = process.env }) {
     // Optionnel : par défaut, l'adresse du catalogue inventaire est déduite
     // de l'adresse d'échange (voir worker.mjs).
     TAKATAK_SC4NNER_INVENTORY_URL: env.TAKATAK_SC4NNER_INVENTORY_URL,
+    // Connaissances TAKATAK (Knowledge AI) : base de l'API publique de
+    // recherche ; optionnelle, le worker a un défaut. Aucune clé requise.
+    KNOWLEDGE_AI_API_URL: env.KNOWLEDGE_AI_API_URL,
     SC4NNER_PRODUCT_CODE: env.SC4NNER_PRODUCT_CODE,
     SC4NNER_ENTITLEMENT: env.SC4NNER_ENTITLEMENT,
   };

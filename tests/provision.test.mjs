@@ -299,3 +299,54 @@ test("échange sans courriel : la session fonctionne, email null, aucun lien cr�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("parcours : départ et arrivée sur SC4NNER, compte lié visible à l'arrivée", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sc4nner-"));
+  const v1 = fakeV1(v1Session("identite-test-retour", "Retour", "retour@example.com"));
+  const base = await v1.url();
+  const { app, origin, call } = await start(join(dir, "r.db"), {
+    TAKATAK_SC4NNER_LAUNCH_URL: `${base}/launch`,
+    TAKATAK_SC4NNER_EXCHANGE_URL: `${base}/exchange`,
+    TAKATAK_SC4NNER_SERVICE_TOKEN: TOKEN,
+  });
+  try {
+    // Départ (SC4NNER) : /auth/start renvoie vers le lancement TAKATAK —
+    // c'est l'étape du milieu, pas l'arrivée.
+    const startRes = await call("/auth/start", { redirect: "manual" });
+    assert.equal(startRes.status, 303);
+    const launchUrl = startRes.headers.get("location");
+    assert.match(launchUrl, /\/launch\?state=/);
+    const state = new URL(launchUrl).searchParams.get("state");
+    const stateCookie = startRes.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("__Host-sc4nner_state="))
+      .split(";")[0];
+
+    // Arrivée : le callback renvoie sur la racine du studio — même origine
+    // SC4NNER, jamais une page TAKATAK.
+    const cb = await call(
+      `/auth/callback?code=${"c".repeat(43)}&state=${state}`,
+      { cookie: stateCookie, redirect: "manual" },
+    );
+    assert.equal(cb.status, 303);
+    const finalUrl = new URL(cb.headers.get("location"), origin);
+    assert.equal(finalUrl.origin, origin);
+    assert.equal(finalUrl.pathname, "/");
+    const sessionCookie = cb.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("__Host-label_session="))
+      .split(";")[0];
+
+    // La page servie à l'arrivée est le studio, et le compte lié y est
+    // visible : la session expose le courriel du compte TAKATAK autorisé.
+    const home = await call("/", { cookie: sessionCookie });
+    assert.equal(home.status, 200);
+    assert.match(await home.text(), /id="account"/);
+    const session = await (await call("/api/session", { cookie: sessionCookie })).json();
+    assert.equal(session.email, "retour@example.com");
+  } finally {
+    await app.close();
+    await v1.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

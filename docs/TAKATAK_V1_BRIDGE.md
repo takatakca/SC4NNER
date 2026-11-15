@@ -136,3 +136,29 @@ Côté V1 (PR compagnon) : l'autorisation devient explicite (page qui
 affiche le compte — courriel — avec changement de compte possible,
 avant tout code), l'enregistrement « fournisseur » est créé dans la
 base principale V1 (source `sc4nner`), puis V1 appelle `/api/provision`.
+
+## Connaissances TAKATAK (Knowledge AI) — arrière-plan du studio
+
+`GET /api/knowledge?q=<texte>&limit=<1..5>` (worker, session du studio
+requise — les mêmes comptes que le provisionnement) interroge l'API
+publique de recherche de **takatakca/knowledgeAI**
+(`GET /api/search`, corpus public curé, résultats avec provenance) et
+renvoie `{ ok, total, results: [{ title, section, excerpt, source_url }] }`,
+filtré aux sources `github.com/takatakca/knowledgeAI/…`.
+
+Gardes : lecture seule ; seule la requête de l'utilisateur part vers
+l'API publique — jamais de donnée client, d'identifiant ni de secret
+(l'API est publique, aucune clé) ; le résultat ne remplit **aucun**
+champ d'étiquette (règle du dépôt : rien d'inventé sur une étiquette) —
+ce sont des références à consulter. Base par défaut
+`https://knowledgeai-nu.vercel.app`, surchargeable par la variable
+d'environnement `KNOWLEDGE_AI_API_URL`. Tout échec ou délai (> 4 s)
+renvoie `{ ok: false, results: [] }` : le studio n'est jamais bloqué.
+
+Reste à faire pour le panneau visible « premium » (étape suivante,
+décision de présentation) : un bloc « Connaissances » dans l'interface
+du studio qui appelle cet endpoint et affiche titre + extrait + lien
+source ; et, côté corpus, des fiches guides/standards « étiquettes »
+dans knowledgeAI (la recherche « étiquette » y renvoie aujourd'hui
+0 résultat — le corpus couvre les projets de l'écosystème, pas encore
+les règles d'étiquetage).

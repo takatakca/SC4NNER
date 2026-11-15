@@ -288,6 +288,77 @@ export default {
             : null,
         });
       }
+      // Connaissances TAKATAK (Knowledge AI) : recherche en arrière-plan
+      // dans le catalogue PUBLIC de takatakca/knowledgeAI, réservée aux
+      // comptes connectés du studio (les mêmes que le provisionnement).
+      // Lecture seule : seule la requête de l'utilisateur part vers l'API
+      // publique — jamais de donnée client ni d'identifiant — et le
+      // résultat ne remplit aucun champ d'étiquette ; ce sont des
+      // références avec provenance, présentées telles quelles. Base
+      // surchargeable par KNOWLEDGE_AI_API_URL ; tout échec = liste vide,
+      // le studio n'est jamais bloqué.
+      if (path === "/api/knowledge" && req.method === "GET") {
+        if (!session)
+          return response({ error: "Connexion requise." }, 401);
+        const q = (url.searchParams.get("q") || "").trim().slice(0, 80);
+        if (!q) return response({ ok: true, total: 0, results: [] });
+        const limitRaw = Number.parseInt(
+          url.searchParams.get("limit") || "3",
+          10,
+        );
+        const limit = Math.min(
+          5,
+          Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 3),
+        );
+        let knowledgeBase = "https://knowledgeai-nu.vercel.app";
+        try {
+          const configured = new URL(String(env.KNOWLEDGE_AI_API_URL || ""));
+          if (
+            configured.protocol === "https:" ||
+            configured.protocol === "http:"
+          )
+            knowledgeBase =
+              configured.origin + configured.pathname.replace(/\/$/, "");
+        } catch {
+          // Base par défaut ci-dessus.
+        }
+        try {
+          const upstream = await fetch(
+            `${knowledgeBase}/api/search?q=${encodeURIComponent(q)}&section=all&limit=${limit}`,
+            { signal: AbortSignal.timeout(4000) },
+          );
+          if (!upstream.ok)
+            return response({ ok: false, total: 0, results: [] });
+          const data = await upstream.json();
+          const results = (
+            Array.isArray(data?.results) ? data.results : []
+          )
+            .filter(
+              (item) =>
+                typeof item?.source_url === "string" &&
+                item.source_url.startsWith(
+                  "https://github.com/takatakca/knowledgeAI/",
+                ),
+            )
+            .slice(0, limit)
+            .map((item) => ({
+              title: String(item.title || item.path || ""),
+              section: String(item.section || ""),
+              excerpt: String(item.excerpt || item.summary || "").slice(
+                0,
+                300,
+              ),
+              source_url: item.source_url,
+            }));
+          return response({
+            ok: true,
+            total: Number(data?.total) || results.length,
+            results,
+          });
+        } catch {
+          return response({ ok: false, total: 0, results: [] });
+        }
+      }
       // Connexion TAKATAK V1 : /auth/start lance TAKATAK, /auth/callback
       // échange le code unique contre une session. L'inscription se fait
       // sur takatak.ca (mobile + code SMS) ; ici, on ne crée aucun compte.
