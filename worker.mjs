@@ -94,6 +94,24 @@ export default {
         String(env.SC4NNER_ENTITLEMENT || "sc4nner_free").trim() ||
         "sc4nner_free",
     };
+    // Lien inventaire TAKATAK : même pont, adresse déduite de l'échange
+    // (.../sc4nner/exchange devient .../sc4nner/inventory), sauf adresse
+    // explicite de l'hôte. Lecture seule : V1 sert le catalogue, aucune
+    // donnée d'étiquette ne part vers V1.
+    const inventoryOverride = httpsUrl(
+      env.TAKATAK_SC4NNER_INVENTORY_URL || "",
+    );
+    let inventoryDerived = null;
+    if (v1.exchange && /\/exchange\/?$/.test(v1.exchange.pathname)) {
+      inventoryDerived = new URL(v1.exchange);
+      inventoryDerived.pathname = v1.exchange.pathname.replace(
+        /\/exchange\/?$/,
+        "/inventory",
+      );
+      inventoryDerived.search = "";
+      inventoryDerived.hash = "";
+    }
+    v1.inventory = inventoryOverride || inventoryDerived;
     const v1Ready = Boolean(v1.launch && v1.exchange && v1.token.length >= 20);
     const redirectTo = (to, cookies = []) => {
       const headers = new Headers({ Location: to, ...security });
@@ -413,6 +431,57 @@ export default {
           .bind(id, sessionOwner)
           .first();
         return response({ ok: true, ...saved });
+      }
+      // Catalogue de l'inventaire TAKATAK de la personne connectée : le
+      // studio peut partir d'un produit réel, pour que le code imprimé soit
+      // celui de l'inventaire. Le compte atelier n'a pas d'inventaire V1.
+      if (path === "/api/inventory/products" && req.method === "GET") {
+        if (session.owner === owner)
+          return response({
+            ok: true,
+            linked: false,
+            reason: "workshop",
+            workspaces: [],
+          });
+        if (!v1Ready || !v1.inventory)
+          return response({
+            ok: true,
+            linked: false,
+            reason: "not_configured",
+            workspaces: [],
+          });
+        let upstream = null;
+        try {
+          const r = await fetch(v1.inventory, {
+            method: "POST",
+            signal: AbortSignal.timeout(8000),
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${v1.token}`,
+            },
+            body: JSON.stringify({ masterIdentityId: session.owner }),
+          });
+          if (r.ok) upstream = await r.json();
+        } catch {
+          upstream = null;
+        }
+        if (
+          !upstream ||
+          upstream.ok !== true ||
+          !Array.isArray(upstream.workspaces)
+        )
+          return response(
+            { error: "Inventaire TAKATAK injoignable. Réessayez." },
+            502,
+          );
+        return response({
+          ok: true,
+          linked: upstream.linked === true,
+          ...(typeof upstream.reason === "string"
+            ? { reason: upstream.reason }
+            : {}),
+          workspaces: upstream.workspaces,
+        });
       }
       return response({ error: "Introuvable" }, 404);
     } catch (error) {

@@ -62,11 +62,40 @@ SC4NNER : `TAKATAK_SC4NNER_LAUNCH_URL`,
 
 ## Ce qui reste dans SC4NNER
 
-Les étiquettes, les produits et les vérifications déclarées vivent dans
-la base propre de SC4NNER, rattachées à `masterIdentityId`. V1 ne
-reçoit aucune donnée d'étiquette : ni nom de produit, ni code-barres, ni
-vérification. L'échange ne renvoie que le contexte du compte, rien
-d'autre.
+Les étiquettes et les vérifications déclarées vivent dans la base
+propre de SC4NNER, rattachées à `masterIdentityId`. V1 ne reçoit aucune
+donnée d'étiquette : ni nom de produit, ni code-barres, ni vérification.
+L'échange ne renvoie que le contexte du compte, rien d'autre.
+
+## Lien inventaire TAKATAK (ajout du 2026-11-14, ordre du propriétaire)
+
+Derrière le studio, le propriétaire veut l'écosystème d'inventaire
+complet : produits suivis par code UPC, stock tenu comme une boutique.
+Cet inventaire vit dans V1 (`/dashboard/inventory`, PR #218 de V1). Le
+lien ajouté ici est en **lecture seule, de V1 vers SC4NNER** :
+
+- V1 publie `POST /api/experiences/sc4nner/inventory` (même jeton de
+  service que l'échange) : il résout l'identité maître → profil V1 →
+  memberships actifs, et ne sert que les espaces où la permission
+  effective `view_inventory` le permet, avec marques et produits (SKU,
+  GTIN, prix, quantité, seuil).
+- Ici, `GET /api/inventory/products` (session requise) relaie cet appel
+  serveur à serveur pour les sessions TAKATAK V1. Le compte atelier
+  reçoit `{linked:false, reason:"workshop"}` ; une identité sans
+  catalogue lisible reçoit une liste vide ; si V1 ne répond pas, le
+  studio répond 502 plutôt qu'un faux catalogue.
+- L'adresse du catalogue est déduite de `TAKATAK_SC4NNER_EXCHANGE_URL`
+  (`…/sc4nner/exchange` → `…/sc4nner/inventory`) ; la variable
+  optionnelle `TAKATAK_SC4NNER_INVENTORY_URL` peut la remplacer.
+  **Aucune nouvelle variable obligatoire, aucun redéploiement de
+  configuration** : les trois variables du pont suffisent.
+- Dans le studio, « Produit de l'inventaire TAKATAK » charge le produit
+  choisi dans le formulaire (marque, nom, ingrédients, format, SKU,
+  GTIN) et l'étiquette sauvegardée garde la référence
+  (`payload.inventory` : produit, espace, entreprise). Le code imprimé
+  est donc celui de l'inventaire. Modifier le SKU ou le GTIN à la main
+  retire le lien. Les mouvements de stock restent dans V1, derrière
+  `manage_inventory` ; SC4NNER ne change aucun stock.
 
 ## Point ouvert pour le propriétaire de V1
 

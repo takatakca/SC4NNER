@@ -145,6 +145,9 @@ export function createApp({ dbPath, worker, env = process.env }) {
     TAKATAK_SC4NNER_LAUNCH_URL: env.TAKATAK_SC4NNER_LAUNCH_URL,
     TAKATAK_SC4NNER_EXCHANGE_URL: env.TAKATAK_SC4NNER_EXCHANGE_URL,
     TAKATAK_SC4NNER_SERVICE_TOKEN: env.TAKATAK_SC4NNER_SERVICE_TOKEN,
+    // Optionnel : par défaut, l'adresse du catalogue inventaire est déduite
+    // de l'adresse d'échange (voir worker.mjs).
+    TAKATAK_SC4NNER_INVENTORY_URL: env.TAKATAK_SC4NNER_INVENTORY_URL,
     SC4NNER_PRODUCT_CODE: env.SC4NNER_PRODUCT_CODE,
     SC4NNER_ENTITLEMENT: env.SC4NNER_ENTITLEMENT,
   };

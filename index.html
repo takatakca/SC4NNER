@@ -292,6 +292,26 @@
             <option value="">Mes étiquettes sauvegardées</option></select
           ><button id="new">Nouvelle étiquette</button>
         </div>
+        <div class="card" id="inventory-import" hidden>
+          <h2>Produit de l’inventaire TAKATAK</h2>
+          <p class="muted">
+            Partez d’un produit de votre inventaire TAKATAK : le SKU et le
+            code UPC/EAN imprimés seront exactement ceux de l’inventaire, et
+            l’étiquette garde le lien avec ce produit.
+          </p>
+          <div class="actions">
+            <select
+              id="inventory-product"
+              aria-label="Produits de l’inventaire TAKATAK"
+              style="max-width: 420px; margin: 0"
+            >
+              <option value="">Choisir un produit de l’inventaire…</option></select
+            ><button id="inventory-use" type="button">
+              Utiliser ce produit
+            </button>
+          </div>
+          <p id="inventory-status" role="status"></p>
+        </div>
         <div class="grid">
           <form id="editor" class="card">
             <h2>1. Votre produit</h2>
