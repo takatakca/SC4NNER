@@ -65,6 +65,9 @@ const STATE_COOKIE = "__Host-sc4nner_state";
 const SESSION_COOKIE = "__Host-label_session";
 const STATE_RE = /^[A-Za-z0-9_-]{43}$/;
 const IDENTITY_RE = /^[A-Za-z0-9-]{8,64}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const validEmail = (v) =>
+  typeof v === "string" && v.trim().length <= 254 && EMAIL_RE.test(v.trim());
 function response(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -149,6 +152,71 @@ export default {
         return response({ ok: false, database: "unavailable" }, 503);
       }
     }
+    // Provisionnement d'un compte TAKATAK lié : TAKATAK V1 appelle cet
+    // endpoint serveur à serveur (jeton de service) au moment où un compte
+    // identifié autorise SC4NNER. On ne crée qu'un LIEN (identité maître +
+    // courriel + nom d'affichage) : l'inscription et l'identité restent
+    // chez TAKATAK V1, aucun annuaire d'utilisateurs ici. Idempotent : un
+    // second appel met à jour le même lien et répond created:false.
+    if (path === "/api/provision" && req.method === "POST") {
+      if (!env.DB) return response({ error: "Sauvegarde indisponible." }, 503);
+      if (v1.token.length < 20)
+        return response({ error: "Provisionnement non configuré." }, 503);
+      const auth = req.headers.get("Authorization") || "";
+      if (
+        !auth.startsWith("Bearer ") ||
+        !safeEqualText(auth.slice(7).trim(), v1.token)
+      )
+        return response({ error: "Non autorisé." }, 401);
+      let data = null;
+      try {
+        const raw = await req.text();
+        if (raw.length > 4096)
+          return response({ error: "Requête trop volumineuse." }, 413);
+        data = JSON.parse(raw);
+      } catch {
+        return response({ error: "JSON invalide." }, 400);
+      }
+      const masterIdentityId =
+        typeof data?.masterIdentityId === "string"
+          ? data.masterIdentityId
+          : "";
+      const email = typeof data?.email === "string" ? data.email.trim() : "";
+      const displayName =
+        typeof data?.displayName === "string"
+          ? data.displayName.slice(0, 80)
+          : null;
+      if (!IDENTITY_RE.test(masterIdentityId) || !validEmail(email))
+        return response({ error: "Compte lié invalide." }, 400);
+      if (data.productCode !== undefined && data.productCode !== v1.product)
+        return response({ error: "Produit inattendu." }, 400);
+      if (data.entitlement !== undefined && data.entitlement !== v1.entitlement)
+        return response({ error: "Droit inattendu." }, 400);
+      try {
+        const existing = await env.DB.prepare(
+          "SELECT master_identity_id FROM linked_accounts WHERE master_identity_id=?",
+        )
+          .bind(masterIdentityId)
+          .first();
+        const now = new Date().toISOString();
+        await env.DB.prepare(
+          "INSERT INTO linked_accounts(master_identity_id,email,display_name,product_code,entitlement,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(master_identity_id) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,product_code=excluded.product_code,entitlement=excluded.entitlement,updated_at=excluded.updated_at",
+        )
+          .bind(
+            masterIdentityId,
+            email,
+            displayName,
+            v1.product,
+            v1.entitlement,
+            now,
+            now,
+          )
+          .run();
+        return response({ ok: true, provisioned: true, created: !existing });
+      } catch {
+        return response({ error: "Sauvegarde indisponible." }, 503);
+      }
+    }
     // Coolify / Node : l'espace vient du serveur (WORKSPACE_ID, voir server/app.mjs).
     // Hébergement Sites : il vient de l'en-tête d'identité posé par la plateforme.
     const owner =
@@ -183,12 +251,29 @@ export default {
     // Les étiquettes appartiennent à la personne connectée, pas à l'espace.
     const sessionOwner = session ? session.owner : owner;
     try {
-      if (path === "/api/session" && req.method === "GET")
+      if (path === "/api/session" && req.method === "GET") {
+        // Le compte connecté affiche le courriel du compte TAKATAK lié :
+        // pour une session TAKATAK V1, on lit le lien provisionné de
+        // l'identité (jamais un libellé générique).
+        let linkedEmail = null;
+        if (session && session.owner !== owner) {
+          try {
+            const link = await env.DB.prepare(
+              "SELECT email FROM linked_accounts WHERE master_identity_id=?",
+            )
+              .bind(session.owner)
+              .first();
+            linkedEmail = link?.email ?? null;
+          } catch {
+            linkedEmail = null;
+          }
+        }
         return response({
           signedIn: !!session,
           username: session
             ? session.display_name || env.DEMO_USERNAME
             : null,
+          email: linkedEmail,
           via: session
             ? session.owner === owner
               ? "workshop"
@@ -202,6 +287,78 @@ export default {
               : "employee"
             : null,
         });
+      }
+      // Connaissances TAKATAK (Knowledge AI) : recherche en arrière-plan
+      // dans le catalogue PUBLIC de takatakca/knowledgeAI, réservée aux
+      // comptes connectés du studio (les mêmes que le provisionnement).
+      // Lecture seule : seule la requête de l'utilisateur part vers l'API
+      // publique — jamais de donnée client ni d'identifiant — et le
+      // résultat ne remplit aucun champ d'étiquette ; ce sont des
+      // références avec provenance, présentées telles quelles. Base
+      // surchargeable par KNOWLEDGE_AI_API_URL ; tout échec = liste vide,
+      // le studio n'est jamais bloqué.
+      if (path === "/api/knowledge" && req.method === "GET") {
+        if (!session)
+          return response({ error: "Connexion requise." }, 401);
+        const q = (url.searchParams.get("q") || "").trim().slice(0, 80);
+        if (!q) return response({ ok: true, total: 0, results: [] });
+        const limitRaw = Number.parseInt(
+          url.searchParams.get("limit") || "3",
+          10,
+        );
+        const limit = Math.min(
+          5,
+          Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 3),
+        );
+        let knowledgeBase = "https://knowledgeai-nu.vercel.app";
+        try {
+          const configured = new URL(String(env.KNOWLEDGE_AI_API_URL || ""));
+          if (
+            configured.protocol === "https:" ||
+            configured.protocol === "http:"
+          )
+            knowledgeBase =
+              configured.origin + configured.pathname.replace(/\/$/, "");
+        } catch {
+          // Base par défaut ci-dessus.
+        }
+        try {
+          const upstream = await fetch(
+            `${knowledgeBase}/api/search?q=${encodeURIComponent(q)}&section=all&limit=${limit}`,
+            { signal: AbortSignal.timeout(4000) },
+          );
+          if (!upstream.ok)
+            return response({ ok: false, total: 0, results: [] });
+          const data = await upstream.json();
+          const results = (
+            Array.isArray(data?.results) ? data.results : []
+          )
+            .filter(
+              (item) =>
+                typeof item?.source_url === "string" &&
+                item.source_url.startsWith(
+                  "https://github.com/takatakca/knowledgeAI/",
+                ),
+            )
+            .slice(0, limit)
+            .map((item) => ({
+              title: String(item.title || item.path || ""),
+              section: String(item.section || ""),
+              excerpt: String(item.excerpt || item.summary || "").slice(
+                0,
+                300,
+              ),
+              source_url: item.source_url,
+            }));
+          return response({
+            ok: true,
+            total: Number(data?.total) || results.length,
+            results,
+          });
+        } catch {
+          return response({ ok: false, total: 0, results: [] });
+        }
+      }
       // Connexion TAKATAK V1 : /auth/start lance TAKATAK, /auth/callback
       // échange le code unique contre une session. L'inscription se fait
       // sur takatak.ca (mobile + code SMS) ; ici, on ne crée aucun compte.
@@ -265,7 +422,7 @@ export default {
           typeof v1Session.displayName === "string"
             ? v1Session.displayName.slice(0, 80)
             : null;
-        await env.DB.batch([
+        const statements = [
           env.DB.prepare("DELETE FROM sessions WHERE expires<?").bind(
             Date.now(),
           ),
@@ -277,7 +434,27 @@ export default {
             name,
             expires,
           ),
-        ]);
+        ];
+        // Le compte lié est alimenté par la session échangée : si V1 a
+        // renvoyé le courriel de l'identité, le lien local le reflète
+        // (même upsert que /api/provision, idempotent).
+        if (validEmail(v1Session.email)) {
+          const now = new Date().toISOString();
+          statements.push(
+            env.DB.prepare(
+              "INSERT INTO linked_accounts(master_identity_id,email,display_name,product_code,entitlement,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(master_identity_id) DO UPDATE SET email=excluded.email,display_name=excluded.display_name,product_code=excluded.product_code,entitlement=excluded.entitlement,updated_at=excluded.updated_at",
+            ).bind(
+              v1Session.masterIdentityId,
+              v1Session.email.trim(),
+              name,
+              v1.product,
+              v1.entitlement,
+              now,
+              now,
+            ),
+          );
+        }
+        await env.DB.batch(statements);
         const maxAge = Math.max(1, Math.floor((expires - Date.now()) / 1000));
         return redirectTo("/", [
           clearState(),

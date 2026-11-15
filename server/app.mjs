@@ -148,6 +148,9 @@ export function createApp({ dbPath, worker, env = process.env }) {
     // Optionnel : par défaut, l'adresse du catalogue inventaire est déduite
     // de l'adresse d'échange (voir worker.mjs).
     TAKATAK_SC4NNER_INVENTORY_URL: env.TAKATAK_SC4NNER_INVENTORY_URL,
+    // Connaissances TAKATAK (Knowledge AI) : base de l'API publique de
+    // recherche ; optionnelle, le worker a un défaut. Aucune clé requise.
+    KNOWLEDGE_AI_API_URL: env.KNOWLEDGE_AI_API_URL,
     SC4NNER_PRODUCT_CODE: env.SC4NNER_PRODUCT_CODE,
     SC4NNER_ENTITLEMENT: env.SC4NNER_ENTITLEMENT,
   };
@@ -211,13 +214,31 @@ export function createApp({ dbPath, worker, env = process.env }) {
       const url = new URL(req.url || "/", origin);
       const method = req.method || "GET";
 
-      if (url.pathname === "/api/release" && method === "GET")
+      if (url.pathname === "/api/release" && method === "GET") {
+        // État réel des comptes : le compte atelier (variables d'env.) OU
+        // au moins un compte TAKATAK lié provisionné (table linked_accounts,
+        // migration 0003) rendent « account » configuré ; le compteur dit
+        // combien de comptes TAKATAK sont liés à ce déploiement.
+        let linkedAccounts = 0;
+        try {
+          linkedAccounts = Number(
+            db.prepare("SELECT COUNT(*) AS n FROM linked_accounts").get()?.n ||
+              0,
+          );
+        } catch {
+          linkedAccounts = 0;
+        }
         return json(res, 200, {
           name: "SC4NNER",
           commit,
-          account: accountConfigured ? "configured" : "not_configured",
+          account:
+            accountConfigured || linkedAccounts > 0
+              ? "configured"
+              : "not_configured",
+          linkedAccounts,
           takatak: takatakConfigured ? "ready" : "not_configured",
         });
+      }
 
       const isLogin = url.pathname === "/api/login" && method === "POST";
       const ip = clientIp(req);
