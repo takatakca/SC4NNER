@@ -38,3 +38,14 @@ La PR #218 indique que ces deux migrations n'ont été appliquées que sur une b
 ## Divergence du moteur d'étiquettes (2026-11-14)
 
 Le moteur `src/` de ce dépôt a évolué sans report dans `takatak-v1/src/lib/inventory` (ordre du propriétaire : ne pas toucher takatak-v1 dans cette passe) : champs de configuration `logoImage` / `logoRatio` / `logoWidthMm` (logo d'entreprise imprimé sur le panneau avant), preset miel pur (`honeyPreset`, `noBestBefore`, mention d'ingrédient unique « Miel / Honey »), et contournements de prérequis consignés au modèle (`overrides`, créés uniquement par l'endpoint serveur dédié, jamais par une sauvegarde ordinaire). À reporter dans V1 lors d'une passe dédiée, si le propriétaire le demande.
+
+## Divergence du moteur d'étiquettes (2026-11-27)
+
+Le moteur `src/` de ce dépôt a de nouveau évolué sans report dans `takatak-v1/src/lib/inventory` (même ordre du propriétaire : ne pas toucher takatak-v1 dans cette passe ; branche `taktak/studio-visuel-canva`, issue #7) :
+
+- **Studio visuel** : éléments placés librement (`elements` dans la configuration : texte, logo, affiche nutritive, code-barres généré, code-barres/QR en image, image libre), fond personnalisé (`background`, `backgroundImage`, `backgroundRatio`), nouveau genre d'élément de scène `textblock`, boîtes de sélection (`scene.boxes`) et rotation autour du centre respectée dans l'aperçu SVG et le PDF (`rotatedAnchor`, `rotatePointCw`).
+- **Vérifications non bloquantes** : `buildLabelScene` ne produit plus d'état « épreuve » (`draft` toujours faux, plus de bandeau) ; `labelReadiness` ne sert qu'à la liste des points à vérifier (facultatif). Les `overrides` ne sont plus que de l'historique lu dans les anciens modèles.
+- **GS1 durci** : `gtinCheckDigit`, `completeRetailBarcode`, `upcA`, `retailBarcode`, `barcodeSvg` dans `barcodes.ts` ; `ean13` complète ou valide le chiffre de contrôle au lieu d'accepter n'importe quels 13 chiffres ; `normalizeGtin` réutilise le même algorithme et ses messages sont en français.
+- **Build** : `build.mjs` produit aussi `dist/engine/` (paquet du moteur pour les tests unitaires Node).
+
+À reporter dans V1 lors d'une passe dédiée, si le propriétaire le demande.

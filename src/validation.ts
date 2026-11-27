@@ -1,4 +1,5 @@
 import { ServiceError } from "./service-error";
+import { gtinCheckDigit } from "./barcodes";
 export const MAX_QUANTITY = 1_000_000_000;
 export function uuid(value: unknown): string {
   if (
@@ -43,15 +44,12 @@ export function normalizeGtin(v: unknown): string | null {
   if (!/^\d{12,13}$/.test(s))
     throw new ServiceError(
       "invalid_input",
-      "Use a 12-digit UPC-A or 13-digit EAN-13.",
+      "Utilisez un UPC-A de 12 chiffres ou un EAN-13 de 13 chiffres.",
     );
-  const sum = [...s.slice(0, -1)]
-    .reverse()
-    .reduce((n, c, i) => n + Number(c) * (i % 2 ? 1 : 3), 0);
-  if ((10 - (sum % 10)) % 10 !== Number(s.at(-1)))
+  if (gtinCheckDigit(s.slice(0, -1)) !== Number(s.at(-1)))
     throw new ServiceError(
       "invalid_input",
-      "The UPC / EAN check digit is invalid.",
+      "Le chiffre de contrôle UPC / EAN est invalide.",
     );
   return s.padStart(13, "0");
 }
