@@ -6,28 +6,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pbkdf2Sync } from "node:crypto";
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import worker from "../dist/server/index.js";
 import { createApp } from "../server/app.mjs";
-
-const account = {
-  SC4NNER_USERNAME: "essai",
-  SC4NNER_SALT: "sel-de-test-seulement",
-  SC4NNER_PASSWORD_HASH: pbkdf2Sync(
-    "Mot-De-Passe-De-Test",
-    "sel-de-test-seulement",
-    100000,
-    32,
-    "sha256",
-  ).toString("hex"),
-};
 
 async function start(dbPath, env = {}) {
   const app = createApp({
     dbPath,
     worker,
-    env: { TRUSTED_PROXY_HOPS: "0", ...account, ...env },
+    env: { TRUSTED_PROXY_HOPS: "0", ...env },
   });
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${app.server.address().port}`;
@@ -154,6 +143,18 @@ const labelWithLink = {
   },
 };
 
+// Session d'espace forgée en base (la connexion locale n'existe plus).
+function mintSession(dbPath) {
+  const secret = "a1".repeat(32);
+  const token = createHash("sha256").update(secret).digest("hex");
+  const db = new DatabaseSync(dbPath);
+  db.prepare(
+    "INSERT OR REPLACE INTO sessions(token,owner,display_name,expires) VALUES(?,?,?,?)",
+  ).run(token, "sc4nner", "essai", Date.now() + 28800000);
+  db.close();
+  return `__Host-label_session=${secret}`;
+}
+
 async function takatakLogin(call) {
   const startRes = await call("/auth/start", { redirect: "manual" });
   const state = new URL(startRes.headers.get("location")).searchParams.get(
@@ -178,7 +179,8 @@ test("inventaire TAKATAK : catalogue lu via le pont, lien gardé sur l'étiquett
   const dir = mkdtempSync(join(tmpdir(), "sc4nner-"));
   const v1 = fakeV1({ session, catalog });
   const base = await v1.url();
-  const { app, call } = await start(join(dir, "inv.db"), {
+  const dbPath = join(dir, "inv.db");
+  const { app, call } = await start(dbPath, {
     TAKATAK_SC4NNER_LAUNCH_URL: `${base}/launch`,
     TAKATAK_SC4NNER_EXCHANGE_URL: `${base}/exchange`,
     TAKATAK_SC4NNER_SERVICE_TOKEN: "jeton-de-service-de-test-assez-long",
@@ -216,10 +218,7 @@ test("inventaire TAKATAK : catalogue lu via le pont, lien gardé sur l'étiquett
     );
     assert.equal(labels[0].payload.inventory.sku, "AISSA-500");
     // Le compte atelier n'a pas d'inventaire V1.
-    const login = await call("/api/login", {
-      body: { username: "essai", password: "Mot-De-Passe-De-Test" },
-    });
-    const wcookie = login.headers.get("set-cookie").split(";")[0];
+    const wcookie = mintSession(dbPath);
     assert.deepEqual(
       await (await call("/api/inventory/products", { cookie: wcookie })).json(),
       { ok: true, linked: false, reason: "workshop", workspaces: [] },
