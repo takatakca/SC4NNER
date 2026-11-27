@@ -345,21 +345,6 @@ async function show() {
   await loadInventory();
   await preview();
 }
-$("login-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const form = e.currentTarget as HTMLFormElement;
-  const btn = form.querySelector("button")!;
-  btn.disabled = true;
-  try {
-    await api("login", Object.fromEntries(new FormData(form)));
-    form.reset();
-    await show();
-  } catch (err: unknown) {
-    $("login-error").textContent = errorMessage(err);
-  } finally {
-    btn.disabled = false;
-  }
-});
 $("logout").onclick = async () => {
   try {
     await api("logout", {});
