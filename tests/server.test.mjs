@@ -4,29 +4,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pbkdf2Sync } from "node:crypto";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import worker from "../dist/server/index.js";
 import { createApp } from "../server/app.mjs";
 
-const account = {
-  SC4NNER_USERNAME: "essai",
-  SC4NNER_SALT: "sel-de-test-seulement",
-  SC4NNER_PASSWORD_HASH: pbkdf2Sync(
-    "Mot-De-Passe-De-Test",
-    "sel-de-test-seulement",
-    100000,
-    32,
-    "sha256",
-  ).toString("hex"),
-};
-
 async function start(dbPath, env = {}) {
   const app = createApp({
     dbPath,
     worker,
-    env: { TRUSTED_PROXY_HOPS: "0", ...account, ...env },
+    env: { TRUSTED_PROXY_HOPS: "0", ...env },
   });
   await new Promise((resolve) => app.server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${app.server.address().port}`;
@@ -42,6 +30,23 @@ async function start(dbPath, env = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   return { app, origin, call };
+}
+
+// Session forgée directement en base (la connexion locale n'existe
+// plus) : le cookie vaut le secret, la base garde son empreinte SHA-256,
+// comme après un échange TAKATAK V1.
+function mintSession(
+  dbPath,
+  { owner = "sc4nner", displayName = "essai" } = {},
+) {
+  const secret = "a1".repeat(32);
+  const token = createHash("sha256").update(secret).digest("hex");
+  const db = new DatabaseSync(dbPath);
+  db.prepare(
+    "INSERT OR REPLACE INTO sessions(token,owner,display_name,expires) VALUES(?,?,?,?)",
+  ).run(token, owner, displayName, Date.now() + 28800000);
+  db.close();
+  return `__Host-label_session=${secret}`;
 }
 
 // Faux TAKATAK V1, pour les essais seulement : il répond à /exchange avec
@@ -125,7 +130,7 @@ test("pages, santé, version et espace privé sans connexion", async () => {
     assert.deepEqual(await (await call("/api/release")).json(), {
       name: "SC4NNER",
       commit: null,
-      account: "configured",
+      account: "not_configured",
       linkedAccounts: 0,
       takatak: "not_configured",
     });
@@ -145,27 +150,23 @@ test("pages, santé, version et espace privé sans connexion", async () => {
   }
 });
 
-test("connexion, sauvegarde, puis les étiquettes survivent à un redémarrage", async () => {
+test("session forgée, sauvegarde, puis les étiquettes survivent à un redémarrage", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sc4nner-"));
   const dbPath = join(dir, "b.db");
   let run = await start(dbPath);
   try {
+    const cookie = mintSession(dbPath);
+    // Une écriture d'une autre origine est refusée, session ou non.
     assert.equal(
       (
-        await run.call("/api/login", {
-          body: { username: "essai", password: "Mot-De-Passe-De-Test" },
+        await run.call("/api/labels", {
+          body: label,
+          cookie,
           headers: { Origin: "https://ailleurs.test" },
         })
       ).status,
       403,
     );
-    const login = await run.call("/api/login", {
-      body: { username: "essai", password: "Mot-De-Passe-De-Test" },
-    });
-    assert.equal(login.status, 200);
-    const setCookie = login.headers.get("set-cookie");
-    assert.match(setCookie, /HttpOnly; Secure; SameSite=Strict/);
-    const cookie = setCookie.split(";")[0];
 
     const saved = await run.call("/api/labels", { body: label, cookie });
     assert.equal(saved.status, 200);
@@ -191,50 +192,21 @@ test("connexion, sauvegarde, puis les étiquettes survivent à un redémarrage",
   }
 });
 
-test("mauvais mots de passe : la même adresse est bloquée avant l'espace entier", async () => {
+test("sans compte lié : /api/release le dit, la santé reste verte, /api/login n'existe plus", async () => {
   const dir = mkdtempSync(join(tmpdir(), "sc4nner-"));
-  const { app, call } = await start(join(dir, "c.db"));
-  try {
-    for (let i = 0; i < 5; i++)
-      assert.equal(
-        (
-          await call("/api/login", {
-            body: { username: "essai", password: "faux" },
-          })
-        ).status,
-        401,
-      );
-    assert.equal(
-      (
-        await call("/api/login", {
-          body: { username: "essai", password: "Mot-De-Passe-De-Test" },
-        })
-      ).status,
-      429,
-    );
-  } finally {
-    await app.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("sans compte configuré : la connexion répond 503, la santé reste verte", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "sc4nner-"));
-  const { app, call } = await start(join(dir, "d.db"), {
-    SC4NNER_USERNAME: "",
-    SC4NNER_SALT: "",
-    SC4NNER_PASSWORD_HASH: "",
-  });
+  const { app, call } = await start(join(dir, "d.db"));
   try {
     assert.equal((await call("/api/health")).status, 200);
     assert.equal(
       (await (await call("/api/release")).json()).account,
       "not_configured",
     );
+    // La route de l'ancien compte local a disparu : elle tombe sur la
+    // garde de session, comme toute route /api sans session.
     assert.equal(
       (await call("/api/login", { body: { username: "a", password: "b" } }))
         .status,
-      503,
+      401,
     );
   } finally {
     await app.close();
@@ -322,23 +294,8 @@ test("connexion TAKATAK : lancement, échange, session et isolement par identit�
         .length,
       0,
     );
-    // Le compte atelier ne voit rien de A non plus.
-    const login = await call("/api/login", {
-      body: { username: "essai", password: "Mot-De-Passe-De-Test" },
-    });
-    const wcookie = login.headers.get("set-cookie").split(";")[0];
-    assert.equal(
-      (await (await call("/api/labels", { cookie: wcookie })).json()).labels
-        .length,
-      0,
-    );
-    assert.deepEqual(await (await call("/api/session", { cookie: wcookie })).json(), {
-      signedIn: true,
-      username: "essai",
-      email: null,
-      via: "workshop",
-      role: "admin",
-    });
+    // Sans session, rien de A n'est visible non plus.
+    assert.equal((await call("/api/labels")).status, 401);
   } finally {
     await app.close();
     await v1.close();
@@ -413,10 +370,10 @@ test("override : code maître haché, employé avec code, directeur avec note, a
   const GS1_ISSUE =
     "Add the product’s assigned GS1 UPC/EAN for a retail barcode.";
   try {
-    const login = await call("/api/login", {
-      body: { username: "essai", password: "Mot-De-Passe-De-Test" },
-    });
-    const admin = login.headers.get("set-cookie").split(";")[0];
+    // Le directeur = une session de l'espace lui-même (owner), forgée
+    // en base : depuis le retrait de la connexion locale, aucune route
+    // HTTP ne crée de session d'espace.
+    const admin = mintSession(dbPath, { displayName: "essai" });
     const startRes = await call("/auth/start", { redirect: "manual" });
     const state = new URL(startRes.headers.get("location")).searchParams.get(
       "state",
