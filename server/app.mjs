@@ -10,8 +10,6 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_BODY_BYTES = 700_000;
-const LOGIN_FAILURES_PER_IP = 5;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 /** Ouvre la base et applique les migrations de `drizzle/` une seule fois chacune. */
 export function openDatabase(path) {
@@ -137,9 +135,6 @@ export function createApp({ dbPath, worker, env = process.env }) {
     // Un déploiement = un espace. L'en-tête d'identité de l'hébergement Sites
     // n'existe pas ici; il est retiré de chaque requête plus bas.
     WORKSPACE_ID: env.SC4NNER_WORKSPACE_ID || "sc4nner",
-    DEMO_USERNAME: env.SC4NNER_USERNAME || env.DEMO_USERNAME,
-    DEMO_SALT: env.SC4NNER_SALT || env.DEMO_SALT,
-    DEMO_PASSWORD_HASH: env.SC4NNER_PASSWORD_HASH || env.DEMO_PASSWORD_HASH,
     // Connexion TAKATAK V1 (même pont que BEH4VIOR) : les valeurs vivent
     // dans Coolify, jamais dans Git. Voir docs/TAKATAK_V1_BRIDGE.md.
     TAKATAK_SC4NNER_LAUNCH_URL: env.TAKATAK_SC4NNER_LAUNCH_URL,
@@ -154,11 +149,6 @@ export function createApp({ dbPath, worker, env = process.env }) {
     SC4NNER_PRODUCT_CODE: env.SC4NNER_PRODUCT_CODE,
     SC4NNER_ENTITLEMENT: env.SC4NNER_ENTITLEMENT,
   };
-  const accountConfigured = Boolean(
-    workerEnv.DEMO_USERNAME &&
-      workerEnv.DEMO_SALT &&
-      workerEnv.DEMO_PASSWORD_HASH,
-  );
   // Même règle que le pont dans worker.mjs : https, sauf localhost en essai.
   const takatakUrlOk = (raw) => {
     try {
@@ -183,17 +173,6 @@ export function createApp({ dbPath, worker, env = process.env }) {
   const commit = /^[a-f0-9]{40}$/.test(env.SOURCE_COMMIT || "")
     ? env.SOURCE_COMMIT
     : null;
-  const failures = new Map();
-
-  const clientIp = (req) => {
-    const forwarded = String(req.headers["x-forwarded-for"] || "")
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-    if (proxyHops > 0 && forwarded.length >= proxyHops)
-      return forwarded[forwarded.length - proxyHops];
-    return req.socket.remoteAddress || "unknown";
-  };
   const publicOrigin = (req) => {
     if (baseUrl) return baseUrl;
     const host = String(req.headers.host || "");
@@ -215,10 +194,9 @@ export function createApp({ dbPath, worker, env = process.env }) {
       const method = req.method || "GET";
 
       if (url.pathname === "/api/release" && method === "GET") {
-        // État réel des comptes : le compte atelier (variables d'env.) OU
-        // au moins un compte TAKATAK lié provisionné (table linked_accounts,
-        // migration 0003) rendent « account » configuré ; le compteur dit
-        // combien de comptes TAKATAK sont liés à ce déploiement.
+        // État réel des comptes : « account » est configuré dès qu'au
+        // moins un compte TAKATAK lié est provisionné (table
+        // linked_accounts, migration 0003) ; le compteur dit combien.
         let linkedAccounts = 0;
         try {
           linkedAccounts = Number(
@@ -231,27 +209,10 @@ export function createApp({ dbPath, worker, env = process.env }) {
         return json(res, 200, {
           name: "SC4NNER",
           commit,
-          account:
-            accountConfigured || linkedAccounts > 0
-              ? "configured"
-              : "not_configured",
+          account: linkedAccounts > 0 ? "configured" : "not_configured",
           linkedAccounts,
           takatak: takatakConfigured ? "ready" : "not_configured",
         });
-      }
-
-      const isLogin = url.pathname === "/api/login" && method === "POST";
-      const ip = clientIp(req);
-      if (isLogin) {
-        const entry = failures.get(ip);
-        if (
-          entry &&
-          entry.until > Date.now() &&
-          entry.count >= LOGIN_FAILURES_PER_IP
-        )
-          return json(res, 429, {
-            error: "Trop de tentatives. Réessayez dans 15 minutes.",
-          });
       }
 
       const headers = new Headers();
@@ -273,18 +234,6 @@ export function createApp({ dbPath, worker, env = process.env }) {
         workerEnv,
       );
 
-      if (isLogin) {
-        if (response.status === 401) {
-          const now = Date.now();
-          const entry = failures.get(ip);
-          if (entry && entry.until > now) entry.count += 1;
-          else failures.set(ip, { count: 1, until: now + LOGIN_WINDOW_MS });
-          if (failures.size > 5000)
-            for (const [key, value] of failures)
-              if (value.until <= now) failures.delete(key);
-        } else if (response.status === 200) failures.delete(ip);
-      }
-
       const out = {};
       for (const [name, value] of response.headers)
         if (name !== "set-cookie") out[name] = value;
@@ -304,7 +253,6 @@ export function createApp({ dbPath, worker, env = process.env }) {
 
   return {
     server,
-    accountConfigured,
     takatakConfigured,
     close: () =>
       new Promise((resolve) => {

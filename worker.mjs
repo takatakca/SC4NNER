@@ -19,7 +19,7 @@ const b64url = (bytes) => {
   for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
   return btoa(s).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 };
-// PBKDF2 comme la vérification du mot de passe de l'atelier (100 000 tours).
+// PBKDF2 (100 000 tours) : code maître de contournement des prérequis.
 const pbkdf2Hex = async (secret, salt) => {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -234,8 +234,8 @@ export default {
       /(?:^|;\s*)__Host-label_session=([a-f0-9]{64})(?:;|$)/,
     )?.[1];
     const token = cookie ? await digest(cookie) : "";
-    // Une session est forgée par le serveur seulement (connexion atelier ou
-    // échange TAKATAK V1) : le propriétaire est l'atelier ou une identité V1.
+    // Une session est forgée par le serveur seulement (échange TAKATAK
+    // V1) : le propriétaire est l'espace ou une identité V1.
     const sessionRow = token
       ? await env.DB.prepare(
           "SELECT owner, display_name FROM sessions WHERE token=? AND expires>?",
@@ -270,9 +270,7 @@ export default {
         }
         return response({
           signedIn: !!session,
-          username: session
-            ? session.display_name || env.DEMO_USERNAME
-            : null,
+          username: session ? session.display_name || null : null,
           email: linkedEmail,
           via: session
             ? session.owner === owner
@@ -471,73 +469,6 @@ export default {
         if (raw.length > 650000)
           return response({ error: "Fichier trop volumineux." }, 413);
         body = JSON.parse(raw);
-      }
-      if (path === "/api/login" && req.method === "POST") {
-        if (!env.DEMO_PASSWORD_HASH || !env.DEMO_SALT)
-          return response({ error: "Compte non configuré." }, 503);
-        const limit = await env.DB.prepare(
-          "SELECT count,until_at FROM login_limits WHERE owner=?",
-        )
-          .bind(owner)
-          .first();
-        if (limit && limit.until_at > Date.now() && limit.count >= 8)
-          return response(
-            { error: "Trop de tentatives. Réessayez dans 15 minutes." },
-            429,
-          );
-        if (
-          typeof body.password !== "string" ||
-          body.password.length > 200 ||
-          typeof body.username !== "string"
-        )
-          return response({ error: "Identifiants invalides." }, 400);
-        const key = await crypto.subtle.importKey(
-          "raw",
-          encoder.encode(body.password),
-          "PBKDF2",
-          false,
-          ["deriveBits"],
-        );
-        const hash = hex(
-          await crypto.subtle.deriveBits(
-            {
-              name: "PBKDF2",
-              salt: encoder.encode(env.DEMO_SALT),
-              iterations: 100000,
-              hash: "SHA-256",
-            },
-            key,
-            256,
-          ),
-        );
-        let diff = hash.length ^ env.DEMO_PASSWORD_HASH.length;
-        for (let i = 0; i < hash.length; i++)
-          diff |=
-            hash.charCodeAt(i) ^ (env.DEMO_PASSWORD_HASH.charCodeAt(i) || 0);
-        if (diff || body.username !== env.DEMO_USERNAME) {
-          await env.DB.prepare(
-            "INSERT INTO login_limits(owner,count,until_at) VALUES(?,1,?) ON CONFLICT(owner) DO UPDATE SET count=CASE WHEN until_at<? THEN 1 ELSE count+1 END,until_at=CASE WHEN until_at<? THEN excluded.until_at ELSE until_at END",
-          )
-            .bind(owner, Date.now() + 900000, Date.now(), Date.now())
-            .run();
-          return response(
-            { error: "Utilisateur ou mot de passe incorrect." },
-            401,
-          );
-        }
-        const secret = hex(crypto.getRandomValues(new Uint8Array(32)));
-        await env.DB.batch([
-          env.DB.prepare("DELETE FROM sessions WHERE expires<?").bind(
-            Date.now(),
-          ),
-          env.DB.prepare("DELETE FROM login_limits WHERE owner=?").bind(owner),
-          env.DB.prepare(
-            "INSERT INTO sessions(token,owner,expires) VALUES(?,?,?)",
-          ).bind(await digest(secret), owner, Date.now() + 28800000),
-        ]);
-        return response({ ok: true }, 200, {
-          "Set-Cookie": `__Host-label_session=${secret}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`,
-        });
       }
       if (!session)
         return response(
@@ -771,7 +702,7 @@ export default {
         const note = typeof body.note === "string" ? body.note.trim() : "";
         if (note.length > 600)
           return response({ error: "Note trop longue." }, 400);
-        const username = session.display_name || env.DEMO_USERNAME || "";
+        const username = session.display_name || "";
         const role = session.owner === owner ? "admin" : "employee";
         let entry;
         if (role === "admin") {

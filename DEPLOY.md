@@ -37,24 +37,19 @@ Pour mémoire, ou pour la refaire ailleurs. Panneau : `https://coolify.takatak.c
 
 L'image lance la vérification des types, la construction et les tests pendant sa construction. Si un test échoue, Coolify n'a pas d'image à démarrer.
 
-## 2. Le compte de l'atelier
+## 2. Connexion : TAKATAK seulement
 
-Sur votre ordinateur, dans le dossier du dépôt :
-
-```bash
-npm run hash-password -- VOTRE_NOM_UTILISATEUR
-```
-
-Le mot de passe est demandé au clavier et ne s'affiche pas. La commande donne trois lignes à coller dans Coolify. Le mot de passe lui-même ne va nulle part ailleurs : ni dans Git, ni dans Coolify.
+Il n'y a plus de compte local à l'atelier : le formulaire nom
+d'utilisateur / mot de passe et sa route ont été retirés le 2026-11-26
+(ordre du propriétaire — le compte démo n'avait jamais été configuré et
+sa route répondait 503 « Compte non configuré »). La seule connexion est
+« Se connecter avec TAKATAK » (étape 9).
 
 ## 3. Variables d'environnement (Runtime) — noms seulement ici
 
 | Variable | Valeur |
 |---|---|
 | `APP_BASE_URL` | l'adresse publique exacte, en `https://`, sans barre finale |
-| `SC4NNER_USERNAME` | ligne 1 de l'étape 2 |
-| `SC4NNER_SALT` | ligne 2 de l'étape 2 |
-| `SC4NNER_PASSWORD_HASH` | ligne 3 de l'étape 2 |
 | `SC4NNER_WORKSPACE_ID` | facultatif (`sc4nner` par défaut). Ne plus le changer après la première sauvegarde |
 | `TRUSTED_PROXY_HOPS` | `1` (le Traefik de Coolify) |
 
@@ -80,7 +75,7 @@ Ne changer que l'enregistrement de cette adresse. Ne toucher ni aux MX, ni aux s
 ## 5. Vérifier la mise en ligne
 
 1. `https://ADRESSE/api/health` répond `{"ok":true,"database":"ready"}`.
-2. `https://ADRESSE/api/release` montre le commit de `main` et `"account":"configured"`.
+2. `https://ADRESSE/api/release` montre le commit de `main`, `"takatak":"ready"`, et `"account":"configured"` dès qu'un compte TAKATAK est lié.
 3. Se connecter, créer une étiquette, **Sauvegarder**.
 4. Relancer un déploiement dans Coolify, se reconnecter : l'étiquette est encore là. C'est la preuve que le volume `/app/data` tient.
 
@@ -103,7 +98,6 @@ Toutes les données sont dans le volume `/app/data` (fichier `sc4nner.db` et ses
 
 - ~~Brancher la connexion sur TAKATAK V1 (un compte par personne, plusieurs espaces).~~ Fait dans le code (PR) : `/auth/start` + `/auth/callback`, sessions par identité, étiquettes isolées par personne. Reste à faire côté propriétaire : voir étape 9.
 - Reprendre les modèles sauvegardés sur l'ancien hébergement, si on veut les garder.
-- Le verrou de connexion protège par adresse puis par espace : plusieurs adresses qui se trompent en même temps peuvent bloquer la connexion 15 minutes.
 
 ## 9. Mettre la connexion TAKATAK en service (propriétaire)
 
@@ -128,9 +122,8 @@ dans cet ordre :
    créer une étiquette, **Sauvegarder**, se déconnecter, se reconnecter :
    l'étiquette est encore là, et un deuxième compte test ne la voit pas.
 
-En attendant, le compte de l'atelier (étape 2) reste le repli : une
-fois ses trois variables posées et l'app redéployée, la connexion par
-nom d'utilisateur et mot de passe fonctionne pour ce compte unique.
+Depuis le 2026-11-26, c'est la seule connexion : le compte local de
+l'atelier a été retiré (étape 2).
 
 ## 10. Lien inventaire TAKATAK (2026-11-14)
 

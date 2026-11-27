@@ -12,8 +12,7 @@
     "build": "node build.mjs",
     "start": "node --disable-warning=ExperimentalWarning server.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test \"tests/*.test.mjs\"",
-    "typecheck": "tsc --noEmit",
-    "hash-password": "node scripts/hash-password.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "pdf-lib": "1.17.1"

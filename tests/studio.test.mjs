@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { pbkdf2Sync } from "node:crypto";
+import { createHash } from "node:crypto";
 import worker from "../dist/server/index.js";
 export function fixture() {
   const db = new DatabaseSync(":memory:");
@@ -52,18 +52,19 @@ export function fixture() {
   };
   return {
     DB,
-    DEMO_USERNAME: "test",
-    DEMO_SALT: "test-salt-only",
-    DEMO_PASSWORD_HASH: pbkdf2Sync(
-      "Test-Only-Password",
-      "test-salt-only",
-      100000,
-      32,
-      "sha256",
-    ).toString("hex"),
+    // Session forgée en base (la connexion locale n'existe plus) : le
+    // cookie vaut le secret, la base garde son empreinte SHA-256.
+    mintSession(owner, displayName = "test") {
+      const secret = "b2".repeat(32);
+      const token = createHash("sha256").update(secret).digest("hex");
+      db.prepare(
+        "INSERT OR REPLACE INTO sessions(token,owner,display_name,expires) VALUES(?,?,?,?)",
+      ).run(token, owner, displayName, Date.now() + 28800000);
+      return secret;
+    },
   };
 }
-test("protected login, cookie, CSRF, expiry, owner scoping and logout", async () => {
+test("session protégée, cookie, CSRF, owner scoping and logout", async () => {
   const env = fixture();
   const req = (path, body, options = {}) =>
     worker.fetch(
@@ -84,30 +85,13 @@ test("protected login, cookie, CSRF, expiry, owner scoping and logout", async ()
       env,
     );
   assert.equal((await req("labels")).status, 401);
+  // La route de l'ancien compte local a disparu : garde de session.
   assert.equal(
-    (await req("login", { username: "test", password: "wrong" })).status,
+    (await req("login", { username: "test", password: "Test-Only-Password" }))
+      .status,
     401,
   );
-  assert.equal(
-    (
-      await req(
-        "login",
-        { username: "test", password: "Test-Only-Password" },
-        { Origin: "https://evil.test" },
-      )
-    ).status,
-    403,
-  );
-  const login = await req("login", {
-    username: "test",
-    password: "Test-Only-Password",
-  });
-  assert.equal(login.status, 200);
-  const cookie = login.headers.get("Set-Cookie").split(";")[0];
-  assert.match(
-    login.headers.get("Set-Cookie"),
-    /HttpOnly; Secure; SameSite=Strict/,
-  );
+  const cookie = `__Host-label_session=${env.mintSession("owner-a")}`;
   assert.equal(
     (await req("labels", undefined, { Cookie: cookie })).status,
     200,
@@ -126,6 +110,17 @@ test("protected login, cookie, CSRF, expiry, owner scoping and logout", async ()
       .status,
     401,
   );
+  // Écriture d'une autre origine : refusée même avec la session.
+  assert.equal(
+    (
+      await req(
+        "labels",
+        { title: "bad", payload: {} },
+        { Cookie: cookie, Origin: "https://evil.test" },
+      )
+    ).status,
+    403,
+  );
   assert.equal(
     (await req("labels", { title: "bad", payload: {} }, { Cookie: cookie }))
       .status,
@@ -138,10 +133,10 @@ test("protected login, cookie, CSRF, expiry, owner scoping and logout", async ()
   );
 });
 
-test("complete form flow: login, server save, reload, vector PDF and scanner", async () => {
+test("complete form flow: session, server save, reload, vector PDF and scanner", async () => {
   const { JSDOM } = await import("jsdom");
   const env = fixture();
-  let cookie = "",
+  let cookie = `__Host-label_session=${env.mintSession("qa-owner")}`,
     download;
   const create = () => {
     const dom = new JSDOM(
@@ -188,11 +183,6 @@ test("complete form flow: login, server save, reload, vector PDF and scanner", a
   let dom = create(),
     w = dom.window,
     d = w.document;
-  d.querySelector("[name=username]").value = "test";
-  d.querySelector("[name=password]").value = "Test-Only-Password";
-  d.querySelector("#login-form").dispatchEvent(
-    new w.Event("submit", { bubbles: true, cancelable: true }),
-  );
   await wait(
     () => !d.querySelector("#app").hidden && d.querySelector("#preview svg"),
   );
@@ -236,7 +226,7 @@ test("complete form flow: login, server save, reload, vector PDF and scanner", a
 test("logo visible, preset miel et override du directeur consigné", async () => {
   const { JSDOM } = await import("jsdom");
   const env = fixture();
-  let cookie = "";
+  let cookie = `__Host-label_session=${env.mintSession("qa-owner")}`;
   const create = () => {
     const dom = new JSDOM(
       readFileSync(new URL("../index.html", import.meta.url), "utf8"),
@@ -278,11 +268,6 @@ test("logo visible, preset miel et override du directeur consigné", async () =>
   let dom = create(),
     w = dom.window,
     d = w.document;
-  d.querySelector("[name=username]").value = "test";
-  d.querySelector("[name=password]").value = "Test-Only-Password";
-  d.querySelector("#login-form").dispatchEvent(
-    new w.Event("submit", { bubbles: true, cancelable: true }),
-  );
   await wait(
     () => !d.querySelector("#app").hidden && d.querySelector("#preview svg"),
   );
