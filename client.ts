@@ -5,12 +5,14 @@ import {
   HONEY_SINGLE_INGREDIENT_FR,
   type LabelConfig,
   type LabelProduct,
+  type PlacedElement,
 } from "./src/label-config";
 import {
   buildLabelScene,
   type LabelScene,
   type LabelPaper,
 } from "./src/label-layout";
+import { upcA } from "./src/barcodes";
 import { labelPdf } from "./src/label-pdf";
 import { quebecRequirements } from "./src/quebec-requirements";
 const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
@@ -59,6 +61,8 @@ const errorMessage = (e: unknown) =>
   e instanceof Error ? e.message : "Action impossible. Réessayez.";
 let config = mielAissaLabelConfig(),
   scene: LabelScene | null = null,
+  lastScene: LabelScene | null = null,
+  selectedEl: string | null = null,
   revision = 0,
   current: { id: string; version: number } | null = null,
   records: SavedLabel[] = [],
@@ -113,6 +117,17 @@ const escape = (v: unknown) =>
       ]!,
   );
 function product() {
+  const rawGtin = $("gtin").value.trim();
+  let gtin: string | null = rawGtin || null;
+  if (rawGtin && /^\d{11}$/.test(rawGtin)) {
+    // Corps UPC-A saisi sans son chiffre de contrôle : on le complète,
+    // le studio accepte le numéro GS1 avec ou sans le dernier chiffre.
+    try {
+      gtin = upcA(rawGtin).text;
+    } catch {
+      gtin = rawGtin;
+    }
+  }
   return {
     id: inventoryLink?.productId ?? "label",
     businessBrandId: inventoryLink?.businessBrandId ?? "label",
@@ -121,7 +136,7 @@ function product() {
     sku: $("sku").value.trim().toUpperCase(),
     size: $("size").value.trim() || "Poids à confirmer",
     ingredients: $("ingredientsFr").value,
-    gtin: $("gtin").value.trim() || null,
+    gtin,
   };
 }
 function renderReviews() {
@@ -172,47 +187,82 @@ function configToForm() {
   $("bestBefore").disabled = config.noBestBefore;
   renderLogo();
   renderReviews();
+  renderCanvasTools();
 }
+const BOX_PLACEHOLDERS: Record<string, string> = {
+  logo: "Logo à téléverser",
+  nutrition: "Affiche à téléverser",
+  barcodeImage: "Code-barres en image",
+  image: "Image à téléverser",
+  text: "Texte vide",
+};
 function paint(s: LabelScene) {
-  const elements = s.elements.map((e) => {
+  lastScene = s;
+  const parts: string[] = [];
+  for (const e of s.elements) {
+    let g = "";
     if (e.kind === "rect")
-      return `<rect x="${e.x}" y="${e.y}" width="${e.width}" height="${e.height}" fill="${e.colour}"/>`;
-    if (e.kind === "text")
-      return `<text x="${e.x}" y="${e.y}" font-size="${e.size}" font-family="Arial,Helvetica,sans-serif" font-weight="${e.bold ? 700 : 400}" fill="${e.colour}">${escape(e.text)}</text>`;
-    if (e.kind === "image")
-      return `<image x="${e.x}" y="${e.y}" width="${e.width}" height="${e.height}" href="${escape(e.data)}"/>`;
-    return `<g transform="${e.rotated ? `translate(${e.x + e.height} ${e.y}) rotate(90)` : `translate(${e.x} ${e.y})`}">${e.bars.map((b) => `<rect x="${b.x}" y="0" width="${b.width}" height="${b.height}" fill="#111"/>`).join("")}<text x="${e.width / 2}" y="${e.barHeight + 4}" text-anchor="middle" font-family="Arial" font-size="3.2">${escape(e.text)}</text></g>`;
-  });
+      g = `<rect x="${e.x}" y="${e.y}" width="${e.width}" height="${e.height}" fill="${e.colour}"/>`;
+    else if (e.kind === "text")
+      g = `<text x="${e.x}" y="${e.y}" font-size="${e.size}" font-family="Arial,Helvetica,sans-serif" font-weight="${e.bold ? 700 : 400}" fill="${e.colour}">${escape(e.text)}</text>`;
+    else if (e.kind === "textblock") {
+      const lines = e.lines
+        .map(
+          (line, i) =>
+            `<text x="${e.x + line.dx}" y="${e.y + e.size + i * e.lineHeight}" font-size="${e.size}" font-family="Arial,Helvetica,sans-serif" font-weight="${e.bold ? 700 : 400}" fill="${e.colour}">${escape(line.text)}</text>`,
+        )
+        .join("");
+      g = e.rotation
+        ? `<g transform="rotate(${e.rotation} ${e.x + e.width / 2} ${e.y + e.height / 2})">${lines}</g>`
+        : lines;
+    } else if (e.kind === "image") {
+      const img = `<image x="${e.x}" y="${e.y}" width="${e.width}" height="${e.height}" href="${escape(e.data)}"/>`;
+      g = e.rotation
+        ? `<g transform="rotate(${e.rotation} ${e.x + e.width / 2} ${e.y + e.height / 2})">${img}</g>`
+        : img;
+    } else
+      g = `<g transform="${e.rotated ? `translate(${e.x + e.height} ${e.y}) rotate(90)` : `translate(${e.x} ${e.y})`}">${e.bars.map((b) => `<rect x="${b.x}" y="0" width="${b.width}" height="${b.height}" fill="#111"/>`).join("")}<text x="${e.width / 2}" y="${e.barHeight + 4}" text-anchor="middle" font-family="Arial" font-size="3.2">${escape(e.text)}</text></g>`;
+    parts.push(e.id ? `<g data-el="${escape(e.id)}">${g}</g>` : g);
+  }
+  // Éléments sans contenu (ex. logo pas encore téléversé) : un repère
+  // pointillé qu'on peut quand même attraper et déplacer.
+  for (const b of s.boxes) {
+    if (!b.missing) continue;
+    parts.push(
+      `<g data-el="${escape(b.id)}"><rect x="${b.x}" y="${b.y}" width="${b.width}" height="${Math.max(b.height, 8)}" fill="#eef2f7" stroke="#98a8bd" stroke-dasharray="2 1.5"/><text x="${b.x + b.width / 2}" y="${b.y + Math.max(b.height, 8) / 2 + 1}" text-anchor="middle" font-family="Arial" font-size="2.6" fill="#5c6a80">${escape(BOX_PLACEHOLDERS[b.kind] ?? "Élément vide")}</text></g>`,
+    );
+  }
+  // Cadre de sélection de l'élément choisi, avec poignée de redimensionnement.
+  const sel = s.boxes.find((b) => b.id === selectedEl);
+  if (sel) {
+    const h = Math.max(sel.height, 8);
+    parts.push(
+      `<g pointer-events="none" transform="rotate(${sel.rotation} ${sel.x + sel.width / 2} ${sel.y + h / 2})"><rect x="${sel.x}" y="${sel.y}" width="${sel.width}" height="${h}" fill="none" stroke="#1565D8" stroke-width="0.5" stroke-dasharray="1.6 1.1"/><rect data-handle="resize" pointer-events="all" x="${sel.x + sel.width - 2.5}" y="${sel.y + h - 2.5}" width="5" height="5" fill="#1565D8"/></g>`,
+    );
+  }
   $("preview").innerHTML =
-    `<svg role="img" aria-label="Aperçu de l’étiquette" viewBox="0 0 ${s.width} ${s.height}" xmlns="http://www.w3.org/2000/svg">${elements.join("")}</svg>`;
+    `<svg role="img" aria-label="Aperçu de l’étiquette" viewBox="0 0 ${s.width} ${s.height}" xmlns="http://www.w3.org/2000/svg">${parts.join("")}</svg>`;
 }
-function renderOverrides(s: LabelScene) {
+function renderPoints(s: LabelScene) {
   const host = $("overrides");
   const parts: string[] = [];
   if (s.issues.length) {
-    const rows = s.issues
-      .map((issue) => {
-        const controls = !current
-          ? `<p class="muted">Sauvegardez d’abord le modèle : un contournement est consigné avec l’étiquette.</p>`
-          : role === "admin"
-            ? `<input data-note maxlength="600" placeholder="Note écrite du directeur (obligatoire)"><button type="button" data-override data-issue="${escape(issue)}">Contourner avec ma note</button>`
-            : `<input data-code inputmode="numeric" maxlength="4" placeholder="Code maître (4 chiffres)"><button type="button" data-override data-issue="${escape(issue)}">Contourner avec le code maître</button>`;
-        return `<div data-row style="margin:8px 0"><p style="margin:0 0 4px">${escape(issue)}</p>${controls}</div>`;
-      })
+    const items = s.issues
+      .map((issue) => `<li>${escape(issue)}</li>`)
       .join("");
     parts.push(
-      `<h3>Vérifications qui bloquent l’étiquette</h3><p class="muted">Complétez chaque prérequis, ou faites-le contourner avec autorisation : directeur = note écrite ; employé = code maître. Le contournement reste consigné au modèle.</p>${rows}`,
+      `<h3>Points à vérifier (facultatif)</h3><p class="muted">Des rappels seulement : ils ne bloquent ni la sauvegarde, ni l’aperçu, ni le PDF. Faites vos vérifications dans le formulaire quand vous le pouvez — aucune autorisation, aucun code, aucun contournement.</p><ul>${items}</ul>`,
     );
   }
   if (config.overrides.length) {
     const items = config.overrides
       .map(
         (o) =>
-          `<li>${escape(o.issue)}<br><span class="muted">${escape(o.by)} — ${o.role === "admin" ? "directeur" : "employé"}, ${o.method === "note" ? "note écrite" : "code maître"}, ${escape(o.at.slice(0, 10))}${o.note ? ` — « ${escape(o.note)} »` : ""}</span></li>`,
+          `<li>${escape(o.issue)}<br><span class="muted">${escape(o.by)} — ${escape(o.at.slice(0, 10))}</span></li>`,
       )
       .join("");
     parts.push(
-      `<h3>Prérequis contournés avec autorisation</h3><ul>${items}</ul>`,
+      `<h3>Anciens contournements consignés (historique)</h3><ul>${items}</ul>`,
     );
   }
   host.innerHTML = parts.join("");
@@ -227,15 +277,10 @@ async function preview() {
     scene = s;
     paint(s);
     $("pdf").disabled = false;
-    const over = s.overridden.length
-      ? `\n${s.overridden.length} prérequis contourné(s) avec autorisation — consignés au modèle.`
-      : "";
-    $("readiness").textContent = s.draft
-      ? `ÉPREUVE — ${s.issues.length} vérifications à compléter.${over}\nLe PDF d’essai reste disponible; consultez les mentions alimentaires avant la vente.`
-      : s.overridden.length
-        ? `Vérifications complètes — dont ${s.overridden.length} contournée(s) avec autorisation (consignées au modèle). Vérifiez l’épreuve imprimée et la lecture réelle avant la production.`
-        : "Vérifications déclarées complètes. Vérifiez l’épreuve imprimée et la lecture réelle avant la production.";
-    renderOverrides(s);
+    $("readiness").textContent = s.issues.length
+      ? `Étiquette prête à exporter.\nPoints à vérifier (facultatif) : ${s.issues.length} — ils ne bloquent ni la sauvegarde ni le PDF.`
+      : "Étiquette prête à exporter. Vérifiez l’étiquette imprimée et la lecture réelle avant la production.";
+    renderPoints(s);
   } catch (e: unknown) {
     if (n !== revision) return;
     scene = null;
@@ -340,7 +385,6 @@ async function show() {
   } catch {
     role = null;
   }
-  $("admin-settings").hidden = role !== "admin";
   await load();
   await loadInventory();
   await preview();
@@ -446,8 +490,6 @@ $("save").onclick = async () => {
   try {
     formToConfig();
     const p = product();
-    if (!$("size").value.trim())
-      throw new Error("Indiquez le poids net à sauvegarder.");
     if (!p.name.trim() || !p.sku) throw new Error("Nom et SKU requis.");
     const result = await api<{ id: string; version: number }>("labels", {
       id: current?.id,
@@ -457,8 +499,6 @@ $("save").onclick = async () => {
     });
     current = result;
     await load();
-    // Re-rendre le panneau des vérifications : le modèle étant sauvegardé,
-    // les contournements autorisés deviennent proposés.
     await preview();
     $("messages").textContent = "Étiquette sauvegardée en ligne.";
   } catch (e: unknown) {
@@ -471,6 +511,7 @@ $("saved").onchange = () => {
   const r = records.find((x) => x.id === $("saved").value);
   if (!r) return;
   current = r;
+  selectedEl = null;
   config = readLabelConfig(r.payload.config, "MIEL AISSA");
   inventoryLink = r.payload.inventory ?? null;
   configToForm();
@@ -481,6 +522,7 @@ $("saved").onchange = () => {
 };
 $("new").onclick = () => {
   current = null;
+  selectedEl = null;
   config = mielAissaLabelConfig();
   config.origin = "";
   config.heightMm = 80;
@@ -521,23 +563,30 @@ $("scan").oninput = () => {
     ? "Lecture correspondante au produit."
     : "En attente d’un code correspondant.";
 };
+/** Lit un fichier image téléversé : PNG/JPEG de 300 Ko maximum, avec ses proportions. */
+async function readImageFile(
+  file: File,
+): Promise<{ data: string; ratio: number }> {
+  if (!["image/png", "image/jpeg"].includes(file.type) || file.size > 300000)
+    throw new Error("Image PNG/JPEG de 300 Ko maximum.");
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const image = new Image();
+  image.src = data;
+  await image.decode();
+  return { data, ratio: image.width / image.height };
+}
 $("logo-file").onchange = async () => {
   try {
     const file = $("logo-file").files?.[0];
     if (!file) return;
-    if (!["image/png", "image/jpeg"].includes(file.type) || file.size > 300000)
-      throw new Error("Logo PNG/JPEG de 300 Ko maximum.");
-    const data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const image = new Image();
-    image.src = data;
-    await image.decode();
+    const { data, ratio } = await readImageFile(file);
     config.logoImage = data;
-    config.logoRatio = image.width / image.height;
+    config.logoRatio = ratio;
     renderLogo();
     await preview();
   } catch (e: unknown) {
@@ -563,72 +612,479 @@ $("honeyPreset").addEventListener("change", () => {
 $("noBestBefore").addEventListener("change", () => {
   void preview();
 });
-$("overrides").addEventListener("click", async (e) => {
-  const btn = (e.target as HTMLElement).closest?.(
-    "[data-override]",
-  ) as HTMLButtonElement | null;
-  if (!btn || !current) return;
-  const row = btn.closest("[data-row]");
-  const note =
-    (row?.querySelector("[data-note]") as HTMLInputElement | null)?.value ??
-    "";
-  const code =
-    (row?.querySelector("[data-code]") as HTMLInputElement | null)?.value ??
-    "";
-  btn.disabled = true;
-  try {
-    const r = await api<{
-      version: number;
-      overrides: LabelConfig["overrides"];
-    }>("labels/override", {
-      id: current.id,
-      issue: btn.dataset.issue,
-      note,
-      code,
-    });
-    current.version = r.version;
-    config.overrides = r.overrides;
-    $("messages").textContent =
-      "Prérequis contourné avec autorisation — consigné au modèle.";
-    await preview();
-  } catch (err: unknown) {
-    $("messages").textContent = errorMessage(err);
-  } finally {
-    btn.disabled = false;
-  }
-});
-$("override-code-set").onclick = async () => {
-  try {
-    await api("override-code", { code: $("override-code-new").value.trim() });
-    $("override-code-new").value = "";
-    $("override-code-status").textContent =
-      "Code maître enregistré. Il est conservé haché et ne sera plus affiché.";
-  } catch (e: unknown) {
-    $("override-code-status").textContent = errorMessage(e);
-  }
-};
 $("nutrition-file").onchange = async () => {
   try {
     const file = $("nutrition-file").files?.[0];
     if (!file) return;
-    if (!["image/png", "image/jpeg"].includes(file.type) || file.size > 300000)
-      throw new Error("Image PNG/JPEG de 300 Ko maximum.");
-    const data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const image = new Image();
-    image.src = data;
-    await image.decode();
+    const { data, ratio } = await readImageFile(file);
     config.nutritionImage = data;
-    config.nutritionRatio = image.width / image.height;
+    config.nutritionRatio = ratio;
     await preview();
   } catch (e: unknown) {
     $("messages").textContent = errorMessage(e);
   }
 };
+/* ------------------------------------------------------------------ */
+/* Studio libre : canevas glisser-déposer (le « Canva » du propriétaire) */
+/* ------------------------------------------------------------------ */
+const KIND_NAMES: Record<PlacedElement["kind"], string> = {
+  logo: "Logo de l’entreprise",
+  nutrition: "Affiche nutritive",
+  barcode: "Code-barres (numéro GS1)",
+  barcodeImage: "Code-barres / QR en image",
+  image: "Image",
+  text: "Texte",
+};
+const clampMm = (v: number, min: number, max: number) =>
+  Math.round(Math.min(max, Math.max(min, v)) * 10) / 10;
+function newElementId(): string {
+  return `el-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+function blankElement(kind: PlacedElement["kind"]): PlacedElement {
+  return {
+    id: newElementId(),
+    kind,
+    x: 10,
+    y: 10,
+    widthMm: 40,
+    rotation: 0,
+    image: "",
+    imageRatio: 1,
+    text: "",
+    fontSizeMm: 3.5,
+    bold: false,
+    colour: "",
+    align: "left",
+  };
+}
+function selectedElement(): PlacedElement | null {
+  return config.elements.find((e) => e.id === selectedEl) ?? null;
+}
+function renderCanvasTools() {
+  const free = config.elements.length > 0;
+  $("free-mode").hidden = free;
+  $("auto-mode").hidden = !free;
+  $("free-tools").hidden = !free;
+  $("bg-colour").value = config.background || "#fffcf4";
+  if (!free) {
+    selectedEl = null;
+    renderElProps();
+  }
+}
+/** Premier passage en mode libre : on pose les éléments actuels du modèle aux endroits habituels, l'utilisateur les replace ensuite à sa façon. */
+function seedElements() {
+  const p = product();
+  const W = config.widthMm;
+  const accent =
+    config.theme === "blue"
+      ? "#1565D8"
+      : config.theme === "honey"
+        ? "#95661B"
+        : "#111111";
+  const els: PlacedElement[] = [];
+  const frontW = Math.min(70, W * 0.36);
+  const frontX = Math.max(4, W * 0.4);
+  if (config.nutritionImage)
+    els.push({
+      ...blankElement("nutrition"),
+      x: 4,
+      y: 8,
+      widthMm: config.nutritionWidthMm,
+    });
+  const infoX = config.nutritionImage ? 8 + config.nutritionWidthMm : 4;
+  const infoLines = [
+    "Ingrédients / Ingredients",
+    config.ingredientsFr || p.ingredients,
+    "",
+    config.business,
+    config.origin,
+  ]
+    .filter((line, i) => i === 0 || line)
+    .join("\n");
+  els.push({
+    ...blankElement("text"),
+    x: infoX,
+    y: 8,
+    widthMm: Math.max(30, frontX - infoX - 6),
+    text: infoLines,
+    fontSizeMm: 3.1,
+  });
+  let fy = 6;
+  if (config.logoImage) {
+    const logoW = Math.min(config.logoWidthMm, frontW);
+    els.push({
+      ...blankElement("logo"),
+      x: frontX + (frontW - logoW) / 2,
+      y: fy,
+      widthMm: logoW,
+    });
+    fy += logoW / config.logoRatio + 3;
+  }
+  els.push({
+    ...blankElement("text"),
+    x: frontX,
+    y: fy,
+    widthMm: frontW,
+    text: config.brand || "VOTRE MARQUE",
+    fontSizeMm: 4.2,
+    bold: true,
+    colour: accent,
+    align: "center",
+  });
+  els.push({
+    ...blankElement("text"),
+    x: frontX,
+    y: fy + 8,
+    widthMm: frontW,
+    text: config.nameFr || p.name,
+    fontSizeMm: 5.2,
+    bold: true,
+    colour: "#111111",
+    align: "center",
+  });
+  els.push({
+    ...blankElement("text"),
+    x: frontX,
+    y: fy + 19,
+    widthMm: frontW,
+    text: p.size,
+    fontSizeMm: 5.3,
+    bold: true,
+    colour: "#111111",
+    align: "center",
+  });
+  const barcodeX = Math.max(4, W - config.seamMm - 46);
+  els.push({
+    ...blankElement("barcode"),
+    x: barcodeX,
+    y: 6,
+    widthMm: 37,
+  });
+  const under: string[] = [];
+  if (config.lot) under.push(`Lot: ${config.lot}`);
+  if (config.bestBefore && !config.noBestBefore)
+    under.push(`Best before / Meilleur avant: ${config.bestBefore}`);
+  if (under.length)
+    els.push({
+      ...blankElement("text"),
+      x: barcodeX,
+      y: 40,
+      widthMm: 42,
+      text: under.join("\n"),
+      fontSizeMm: 2.7,
+    });
+  config.elements = els;
+}
+function addElement(el: PlacedElement) {
+  config.elements = [...config.elements, el];
+  selectedEl = el.id;
+  renderCanvasTools();
+  renderElProps();
+  void preview();
+}
+function renderElProps() {
+  const host = $("el-props");
+  const el = selectedElement();
+  if (!el) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  const idx = config.elements.indexOf(el);
+  host.innerHTML = `
+    <p style="font-weight:600;font-size:13px;margin:10px 0 4px">Élément sélectionné : ${KIND_NAMES[el.kind]}</p>
+    <p class="muted" style="margin:0">Glissez-le directement sur l’aperçu, ou précisez ici :</p>
+    <div class="row">
+      <label>Position horizontale (mm)<input id="el-x" type="number" step="0.5" value="${el.x}"></label>
+      <label>Position verticale (mm)<input id="el-y" type="number" step="0.5" value="${el.y}"></label>
+    </div>
+    <div class="row">
+      <label>Largeur (mm)<input id="el-w" type="number" step="1" min="8" value="${el.widthMm}"></label>
+      <label>Rotation<button id="el-rotate" type="button" style="margin-top:6px">Tourner (actuel : ${el.rotation}°)</button></label>
+    </div>
+    ${
+      el.kind === "text"
+        ? `
+    <label>Texte<textarea id="el-text" maxlength="1500">${escape(el.text)}</textarea></label>
+    <div class="row">
+      <label>Taille du texte (mm)<input id="el-size" type="number" step="0.5" min="2" max="12" value="${el.fontSizeMm}"></label>
+      <label>Couleur du texte<input id="el-colour" type="color" value="${el.colour || "#111111"}"></label>
+    </div>
+    <label class="check"><input id="el-bold" type="checkbox" ${el.bold ? "checked" : ""}>Texte en gras</label>
+    <label>Alignement<select id="el-align"><option value="left" ${el.align === "left" ? "selected" : ""}>À gauche</option><option value="center" ${el.align === "center" ? "selected" : ""}>Centré</option><option value="right" ${el.align === "right" ? "selected" : ""}>À droite</option></select></label>`
+        : ""
+    }
+    <div class="actions">
+      <button id="el-front" type="button" ${idx === config.elements.length - 1 ? "disabled" : ""}>Mettre devant</button>
+      <button id="el-back" type="button" ${idx === 0 ? "disabled" : ""}>Mettre derrière</button>
+      <button id="el-delete" type="button">Retirer l’élément</button>
+    </div>`;
+  const num = (id: string, apply: (v: number) => void) => {
+    const input = host.querySelector(`#${id}`) as HTMLInputElement | null;
+    input?.addEventListener("change", () => {
+      const v = Number(input.value);
+      if (Number.isFinite(v)) {
+        apply(v);
+        renderElProps();
+        void preview();
+      }
+    });
+  };
+  num("el-x", (v) => (el.x = clampMm(v, 0, 400)));
+  num("el-y", (v) => (el.y = clampMm(v, 0, 400)));
+  num("el-w", (v) => (el.widthMm = clampMm(v, 8, 400)));
+  host.querySelector("#el-rotate")?.addEventListener("click", () => {
+    el.rotation =
+      el.kind === "barcode"
+        ? el.rotation === 90
+          ? 0
+          : 90
+        : (el.rotation + 90) % 360;
+    renderElProps();
+    void preview();
+  });
+  host.querySelector("#el-text")?.addEventListener("input", (e) => {
+    el.text = (e.target as HTMLTextAreaElement).value;
+    void preview();
+  });
+  num("el-size", (v) => (el.fontSizeMm = clampMm(v, 2, 12)));
+  host.querySelector("#el-colour")?.addEventListener("input", (e) => {
+    el.colour = (e.target as HTMLInputElement).value;
+    void preview();
+  });
+  host.querySelector("#el-bold")?.addEventListener("change", (e) => {
+    el.bold = (e.target as HTMLInputElement).checked;
+    void preview();
+  });
+  host.querySelector("#el-align")?.addEventListener("change", (e) => {
+    el.align = (e.target as HTMLSelectElement).value as PlacedElement["align"];
+    void preview();
+  });
+  host.querySelector("#el-front")?.addEventListener("click", () => {
+    config.elements = [
+      ...config.elements.filter((e) => e.id !== el.id),
+      el,
+    ];
+    renderElProps();
+    void preview();
+  });
+  host.querySelector("#el-back")?.addEventListener("click", () => {
+    config.elements = [
+      el,
+      ...config.elements.filter((e) => e.id !== el.id),
+    ];
+    renderElProps();
+    void preview();
+  });
+  host.querySelector("#el-delete")?.addEventListener("click", () => {
+    config.elements = config.elements.filter((e) => e.id !== el.id);
+    selectedEl = null;
+    renderCanvasTools();
+    renderElProps();
+    void preview();
+  });
+}
+$("free-mode").onclick = () => {
+  if (!config.elements.length) seedElements();
+  selectedEl = null;
+  renderCanvasTools();
+  renderElProps();
+  $("messages").textContent =
+    "Mode libre activé : touchez un élément sur l’aperçu et glissez-le où vous voulez. Sauvegardez pour conserver vos positions.";
+  void preview();
+};
+$("auto-mode").onclick = () => {
+  config.elements = [];
+  selectedEl = null;
+  renderCanvasTools();
+  renderElProps();
+  $("messages").textContent =
+    "Disposition automatique de retour. Les éléments libres ont été retirés du modèle (sauvegardez pour confirmer).";
+  void preview();
+};
+$("bg-colour").addEventListener("input", () => {
+  config.background = $("bg-colour").value;
+  void preview();
+});
+$("bg-file").onchange = async () => {
+  try {
+    const file = $("bg-file").files?.[0];
+    if (!file) return;
+    const { data, ratio } = await readImageFile(file);
+    config.backgroundImage = data;
+    config.backgroundRatio = ratio;
+    await preview();
+  } catch (e: unknown) {
+    $("messages").textContent = errorMessage(e);
+  }
+};
+$("bg-clear").onclick = () => {
+  config.background = "";
+  config.backgroundImage = "";
+  config.backgroundRatio = 1;
+  renderCanvasTools();
+  void preview();
+};
+$("add-text").onclick = () =>
+  addElement({
+    ...blankElement("text"),
+    text: "Nouveau texte",
+    widthMm: 60,
+    fontSizeMm: 4,
+  });
+$("add-logo").onclick = () => {
+  if (!config.logoImage) {
+    $("messages").textContent =
+      "Téléversez d’abord le logo de l’entreprise (section 1), puis posez-le ici.";
+    return;
+  }
+  addElement({
+    ...blankElement("logo"),
+    x: 20,
+    y: 5,
+    widthMm: config.logoWidthMm,
+  });
+};
+$("add-nutrition").onclick = () => {
+  if (!config.nutritionImage) {
+    $("messages").textContent =
+      "Téléversez d’abord le tableau de valeur nutritive (section « Mentions alimentaires »), puis posez-le ici.";
+    return;
+  }
+  addElement({
+    ...blankElement("nutrition"),
+    x: 4,
+    y: 8,
+    widthMm: config.nutritionWidthMm,
+  });
+};
+$("add-barcode").onclick = () =>
+  addElement({
+    ...blankElement("barcode"),
+    x: Math.max(4, config.widthMm - config.seamMm - 46),
+    y: 6,
+    widthMm: 37,
+  });
+$("add-image-file").onchange = async () => {
+  try {
+    const file = $("add-image-file").files?.[0];
+    if (!file) return;
+    const { data, ratio } = await readImageFile(file);
+    addElement({
+      ...blankElement("image"),
+      image: data,
+      imageRatio: ratio,
+      widthMm: 40,
+    });
+    $("add-image-file").value = "";
+  } catch (e: unknown) {
+    $("messages").textContent = errorMessage(e);
+  }
+};
+$("barcode-image-file").onchange = async () => {
+  try {
+    const file = $("barcode-image-file").files?.[0];
+    if (!file) return;
+    const { data, ratio } = await readImageFile(file);
+    addElement({
+      ...blankElement("barcodeImage"),
+      image: data,
+      imageRatio: ratio,
+      widthMm: 37,
+    });
+    $("barcode-image-file").value = "";
+  } catch (e: unknown) {
+    $("messages").textContent = errorMessage(e);
+  }
+};
+/* Glisser-déposer sur l'aperçu : pointeur (doigt ou souris), en mm. */
+type DragState = {
+  id: string;
+  mode: "move" | "resize";
+  startX: number;
+  startY: number;
+  origX: number;
+  origY: number;
+  origW: number;
+  group: Element | null;
+  baseTransform: string;
+};
+let dragState: DragState | null = null;
+function previewPoint(evt: PointerEvent): { x: number; y: number } | null {
+  const svg = $("preview").querySelector("svg");
+  if (!svg || !lastScene) return null;
+  const rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    x: ((evt.clientX - rect.left) / rect.width) * lastScene.width,
+    y: ((evt.clientY - rect.top) / rect.height) * lastScene.height,
+  };
+}
+function elementGroup(id: string): Element | null {
+  for (const g of $("preview").querySelectorAll("[data-el]"))
+    if (g.getAttribute("data-el") === id) return g;
+  return null;
+}
+$("preview").addEventListener("pointerdown", (evt) => {
+  const target = evt.target as Element;
+  const handle = target.closest?.("[data-handle]");
+  const holder = target.closest?.("[data-el]");
+  if (!handle && !holder) return;
+  const id = handle ? selectedEl : holder?.getAttribute("data-el");
+  if (!id) return;
+  const el = config.elements.find((e) => e.id === id);
+  const pt = previewPoint(evt as PointerEvent);
+  if (!el || !pt) return;
+  evt.preventDefault();
+  if (selectedEl !== id) {
+    selectedEl = id;
+    renderElProps();
+    if (lastScene) paint(lastScene);
+  }
+  const group = elementGroup(id);
+  dragState = {
+    id,
+    mode: handle ? "resize" : "move",
+    startX: pt.x,
+    startY: pt.y,
+    origX: el.x,
+    origY: el.y,
+    origW: el.widthMm,
+    group,
+    baseTransform: group?.getAttribute("transform") ?? "",
+  };
+});
+window.addEventListener("pointermove", (evt) => {
+  if (!dragState || dragState.mode !== "move") return;
+  const pt = previewPoint(evt);
+  if (!pt) return;
+  const dx = pt.x - dragState.startX,
+    dy = pt.y - dragState.startY;
+  dragState.group?.setAttribute(
+    "transform",
+    `translate(${dx} ${dy}) ${dragState.baseTransform}`.trim(),
+  );
+});
+window.addEventListener("pointerup", (evt) => {
+  if (!dragState) return;
+  const state = dragState;
+  dragState = null;
+  const el = config.elements.find((e) => e.id === state.id);
+  const pt = previewPoint(evt);
+  if (!el || !pt || !lastScene) {
+    if (lastScene) paint(lastScene);
+    return;
+  }
+  if (state.mode === "move") {
+    el.x = clampMm(state.origX + (pt.x - state.startX), 0, Math.max(0, lastScene.width - 5));
+    el.y = clampMm(state.origY + (pt.y - state.startY), 0, Math.max(0, lastScene.height - 5));
+  } else {
+    el.widthMm = clampMm(state.origW + (pt.x - state.startX), 8, lastScene.width);
+  }
+  renderElProps();
+  void preview();
+});
 configToForm();
 const authMessages: Record<string, string> = {
   invalid:

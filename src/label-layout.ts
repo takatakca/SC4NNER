@@ -1,11 +1,12 @@
 import { PDFDocument, StandardFonts, type PDFFont } from "pdf-lib";
 import { normalizeGtin } from "./validation";
-import { code39, ean13 } from "./barcodes";
+import { code39, ean13, retailBarcode, type RetailBarcode } from "./barcodes";
 import {
   labelConfigInput,
   labelReadiness,
   type LabelConfig,
   type LabelProduct,
+  type PlacedElement,
 } from "./label-config";
 export const POINTS_PER_MM = 72 / 25.4;
 /** RSAC schedule 6. The packaging reviewer determines the applicable PSE. */
@@ -19,14 +20,34 @@ export function minimumDeclarationHeightMm(areaCm2: number): number {
 export type LabelElement =
   | {
       kind: "image";
+      id?: string;
       x: number;
       y: number;
       width: number;
       height: number;
       data: string;
+      /** Rotation dans le sens horaire (degrés) autour du centre. */
+      rotation?: number;
+    }
+  | {
+      kind: "textblock";
+      id?: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      /** Lignes déjà coupées à la largeur du bloc; dx = décalage d'alignement. */
+      lines: { text: string; dx: number }[];
+      size: number;
+      bold: boolean;
+      colour: string;
+      lineHeight: number;
+      /** Rotation dans le sens horaire (degrés) autour du centre du bloc. */
+      rotation: number;
     }
   | {
       kind: "rect";
+      id?: string;
       x: number;
       y: number;
       width: number;
@@ -35,6 +56,7 @@ export type LabelElement =
     }
   | {
       kind: "text";
+      id?: string;
       x: number;
       y: number;
       text: string;
@@ -44,6 +66,7 @@ export type LabelElement =
     }
   | {
       kind: "barcode";
+      id?: string;
       x: number;
       y: number;
       width: number;
@@ -54,18 +77,73 @@ export type LabelElement =
       moduleMm: number;
       barHeight: number;
     };
+/** Boîte d'un élément du studio visuel, pour la sélection et le glisser-déposer. */
+export type LabelBox = {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  /** Vrai quand l'élément n'a pas encore de contenu à dessiner (ex. pas de logo téléversé). */
+  missing?: boolean;
+};
 export type LabelScene = {
   width: number;
   height: number;
   seamMm: number;
+  /** Toujours faux depuis le 2026-11-27 : plus de bandeau « épreuve ». */
   draft: boolean;
   elements: LabelElement[];
+  /** Points à vérifier (facultatif) : informatifs, jamais bloquants. */
   issues: string[];
-  /** Prérequis contournés avec autorisation (consignés au modèle). */
+  /** Historique seulement : anciens contournements consignés au modèle. */
   overridden: string[];
+  /** Boîtes des éléments du canevas libre (vide en disposition automatique). */
+  boxes: LabelBox[];
   flatFaceFit?: { requiredWidthMm: number; measuredWidthMm: number };
   minimumDeclarationHeightMm: number;
 };
+/**
+ * Ancre de dessin PDF pour un objet tourné autour de son centre. Les
+ * coordonnées sont en espace PDF (y vers le haut) ; `degCw` est la rotation
+ * dans le sens horaire telle que l'utilisateur la voit. pdf-lib tourne en
+ * sens antihoraire autour de l'ancre : l'ancre rendue place le centre de
+ * l'objet exactement au centre demandé, et `pdfDeg` vaut l'angle à passer
+ * à l'option `rotate` de pdf-lib.
+ */
+export function rotatedAnchor(
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  degCw: number,
+): { x: number; y: number; pdfDeg: number } {
+  const t = (-degCw * Math.PI) / 180;
+  const cos = Math.cos(t),
+    sin = Math.sin(t);
+  return {
+    x: cx - ((w / 2) * cos - (h / 2) * sin),
+    y: cy - ((w / 2) * sin + (h / 2) * cos),
+    pdfDeg: -degCw || 0,
+  };
+}
+/** Tourne un point autour d'un centre, en espace PDF (y vers le haut). */
+export function rotatePointCw(
+  cx: number,
+  cy: number,
+  x: number,
+  y: number,
+  degCw: number,
+): { x: number; y: number } {
+  const t = (-degCw * Math.PI) / 180;
+  const cos = Math.cos(t),
+    sin = Math.sin(t);
+  const dx = x - cx,
+    dy = y - cy;
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+}
 let fonts: Promise<{ normal: PDFFont; bold: PDFFont }> | null = null;
 function metrics() {
   return (fonts ??= PDFDocument.create().then(async (doc) => ({
@@ -97,29 +175,173 @@ function linesFor(
   }
   return result;
 }
+/**
+ * Canevas libre du studio visuel : chaque élément posé par l'utilisateur
+ * est dessiné exactement où il l'a mis (position, largeur, rotation
+ * sauvegardées dans le modèle). Aucune disposition automatique, aucun
+ * prérequis : ce que l'utilisateur voit est ce que le PDF imprime.
+ */
+function buildCanvasScene(
+  scene: LabelScene,
+  product: LabelProduct,
+  config: LabelConfig,
+  font: { normal: PDFFont; bold: PDFFont },
+): void {
+  const black = "#111111";
+  for (const el of config.elements) {
+    if (el.kind === "text") {
+      const selected = el.bold ? font.bold : font.normal;
+      let lines: string[];
+      try {
+        lines = linesFor(el.text, selected, el.fontSizeMm, el.widthMm);
+      } catch (e) {
+        if (e instanceof Error && /WinAnsi|encode/.test(e.message))
+          throw new Error(
+            "Use English/French Latin characters in label text; this font cannot print the supplied symbol.",
+          );
+        throw e;
+      }
+      const lineHeight = el.fontSizeMm * 1.3;
+      const height = Math.max(lineHeight, lines.length * lineHeight);
+      if (lines.length)
+        scene.elements.push({
+          kind: "textblock",
+          id: el.id,
+          x: el.x,
+          y: el.y,
+          width: el.widthMm,
+          height,
+          lines: lines.map((text) => {
+            const w = selected.widthOfTextAtSize(text, el.fontSizeMm);
+            return {
+              text,
+              dx:
+                el.align === "center"
+                  ? (el.widthMm - w) / 2
+                  : el.align === "right"
+                    ? el.widthMm - w
+                    : 0,
+            };
+          }),
+          size: el.fontSizeMm,
+          bold: el.bold,
+          colour: el.colour || black,
+          lineHeight,
+          rotation: el.rotation,
+        });
+      scene.boxes.push({
+        id: el.id,
+        kind: el.kind,
+        x: el.x,
+        y: el.y,
+        width: el.widthMm,
+        height,
+        rotation: el.rotation,
+        missing: lines.length === 0,
+      });
+      continue;
+    }
+    if (el.kind === "barcode") {
+      const retail: RetailBarcode | null = product.gtin
+        ? retailBarcode(product.gtin)
+        : null;
+      const code = retail ?? code39(product.sku);
+      const moduleMm = el.widthMm / code.width;
+      const barHeight = retail ? moduleMm * (22.85 / 0.33) : moduleMm * 59;
+      const symbolHeight = barHeight + 18 * moduleMm;
+      const rotated = el.rotation === 90;
+      scene.elements.push({
+        kind: "barcode",
+        id: el.id,
+        x: el.x,
+        y: el.y,
+        width: code.width * moduleMm,
+        height: symbolHeight,
+        rotated,
+        moduleMm,
+        barHeight,
+        text: retail ? retail.display : (code as { text: string }).text,
+        bars: code.bars.map((bar) => ({
+          x: bar.x * moduleMm,
+          width: bar.width * moduleMm,
+          height:
+            barHeight +
+            (retail &&
+            [0, 2, 46, 48, 92, 94].includes(Math.round(bar.x - 11))
+              ? 5 * moduleMm
+              : 0),
+        })),
+      });
+      scene.boxes.push({
+        id: el.id,
+        kind: el.kind,
+        x: el.x,
+        y: el.y,
+        width: rotated ? symbolHeight : code.width * moduleMm,
+        height: rotated ? code.width * moduleMm : symbolHeight,
+        rotation: el.rotation,
+      });
+      continue;
+    }
+    // Éléments image : logo et affiche nutritive reprennent les images du
+    // modèle ; barcodeImage et image portent leur propre téléversement.
+    const data =
+      el.kind === "logo"
+        ? config.logoImage
+        : el.kind === "nutrition"
+          ? config.nutritionImage
+          : el.image;
+    const ratio =
+      el.kind === "logo"
+        ? config.logoRatio
+        : el.kind === "nutrition"
+          ? config.nutritionRatio
+          : el.imageRatio;
+    const height = el.widthMm / ratio;
+    if (data)
+      scene.elements.push({
+        kind: "image",
+        id: el.id,
+        x: el.x,
+        y: el.y,
+        width: el.widthMm,
+        height,
+        data,
+        rotation: el.rotation,
+      });
+    scene.boxes.push({
+      id: el.id,
+      kind: el.kind,
+      x: el.x,
+      y: el.y,
+      width: el.widthMm,
+      height,
+      rotation: el.rotation,
+      missing: !data,
+    });
+  }
+}
 export async function buildLabelScene(
   product: LabelProduct,
   value: LabelConfig,
 ): Promise<LabelScene> {
   const config = labelConfigInput(value);
   const font = await metrics();
-  // Un prérequis contourné avec autorisation reste consigné (scene.overridden)
-  // mais ne bloque plus l'état « prêt » ; tous les autres continuent de
-  // bloquer exactement comme avant.
-  const allIssues = labelReadiness(product, config);
-  const overridden = allIssues.filter((issue) =>
-    config.overrides.some((o) => o.issue === issue),
-  );
-  const issues = allIssues.filter((issue) => !overridden.includes(issue));
-  const draft = issues.length > 0;
+  // Ordre du propriétaire du 2026-11-27 : les vérifications sont des points
+  // facultatifs. Elles restent calculées pour l'affichage (scene.issues)
+  // mais ne bloquent plus rien : pas de bandeau « épreuve », pas d'état
+  // bloqué, pas de contournement. scene.overridden ne garde que
+  // l'historique des modèles créés avant cet ordre.
+  const issues = labelReadiness(product, config);
   const scene: LabelScene = {
     width: config.widthMm,
     height: config.heightMm,
     seamMm: config.seamMm,
-    draft,
+    draft: false,
     issues,
-    overridden,
+    overridden: config.overrides.map((o) => o.issue),
     elements: [],
+    boxes: [],
     minimumDeclarationHeightMm: minimumDeclarationHeightMm(
       config.principalDisplayAreaCm2,
     ),
@@ -131,7 +353,18 @@ export async function buildLabelScene(
         : config.theme === "honey"
           ? "#95661B"
           : black;
-  if (config.theme === "honey")
+  // Fond de l'étiquette : la couleur choisie par l'utilisateur remplace le
+  // fond du thème ; l'image de fond téléversée couvre toute l'étiquette.
+  if (config.background)
+    scene.elements.push({
+      kind: "rect",
+      x: 0,
+      y: 0,
+      width: scene.width,
+      height: scene.height,
+      colour: config.background,
+    });
+  else if (config.theme === "honey")
     scene.elements.push({
       kind: "rect",
       x: 0,
@@ -140,6 +373,21 @@ export async function buildLabelScene(
       height: scene.height,
       colour: "#FFFCF4",
     });
+  if (config.backgroundImage)
+    scene.elements.push({
+      kind: "image",
+      x: 0,
+      y: 0,
+      width: scene.width,
+      height: scene.height,
+      data: config.backgroundImage,
+    });
+  // Studio visuel : dès que l'utilisateur a posé des éléments, le canevas
+  // libre fait foi et la disposition automatique ne s'applique plus.
+  if (config.elements.length) {
+    buildCanvasScene(scene, product, config, font);
+    return scene;
+  }
   if (product.gtin) normalizeGtin(product.gtin);
   const code = product.gtin ? ean13(product.gtin) : code39(product.sku);
   const moduleMm =
@@ -173,7 +421,7 @@ export async function buildLabelScene(
   }
   const barcodePanelWidth = Math.max(40, occupiedWidth + 4);
   const edge = 4,
-    top = draft ? 8 : 5,
+    top = 5,
     bottom = config.heightMm - 5;
   const nutritionImage =
     config.nutritionStatus === "provided" ? config.nutritionImage : "";
@@ -259,16 +507,6 @@ export async function buildLabelScene(
     }
     return y;
   }
-  if (draft)
-    scene.elements.push({
-      kind: "text",
-      x: edge,
-      y: 3.7,
-      text: "ÉPREUVE / DRAFT - Informations et vérifications à compléter",
-      size: 2.2,
-      bold: true,
-      colour: black,
-    });
   if (nutritionImage) {
     const imageHeight = nutritionWidth * config.nutritionRatio;
     if (imageHeight > bottom - top)

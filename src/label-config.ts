@@ -17,13 +17,12 @@ import {
  */
 export const HONEY_SINGLE_INGREDIENT_FR = "Miel / Honey";
 /**
- * Contournement autorisé d'un prérequis bloquant, consigné avec l'étiquette.
- * Le prérequis n'est jamais effacé : il est marqué « contourné avec
- * autorisation » et l'entrée reste visible dans le modèle sauvegardé.
- * Directeur (admin) : note écrite obligatoire. Employé : code maître à
- * 4 chiffres vérifié côté serveur (méthode « code », le code n'est jamais
- * consigné). Les entrées ne peuvent être créées que par l'endpoint serveur
- * dédié ; une sauvegarde ordinaire ne peut ni en ajouter ni en retirer.
+ * Ancien contournement d'un prérequis, consigné avec l'étiquette. Le
+ * mécanisme a été aboli par l'ordre du propriétaire du 2026-11-27 (« Enlever
+ * vérification obligatoire ») : les vérifications sont devenues des points
+ * facultatifs qui ne bloquent plus rien, il n'y a plus ni contournement, ni
+ * note du directeur, ni code maître. Les entrées déjà consignées restent
+ * lisibles dans les modèles sauvegardés, à titre d'historique seulement.
  */
 export type LabelOverride = {
   issue: string;
@@ -32,6 +31,44 @@ export type LabelOverride = {
   method: "note" | "code";
   note: string;
   at: string;
+};
+/**
+ * Élément posé librement sur le canevas du studio visuel (« mon propre
+ * Canva », ordre du propriétaire du 2026-11-27). L'utilisateur déplace
+ * chaque élément au doigt ou à la souris ; la position, la largeur et la
+ * rotation choisies sont sauvegardées avec le modèle et respectées dans
+ * l'aperçu et le PDF. `logo` et `nutrition` reprennent les images des
+ * champs historiques du modèle ; `barcode` est généré depuis le numéro
+ * GS1 (ou le SKU) du produit ; `barcodeImage` est le code-barres ou le
+ * code QR déjà créé par GS1, téléversé en image ; `image` est n'importe
+ * quelle autre image téléversée ; `text` est un bloc de texte libre.
+ */
+export type PlacedElementKind =
+  | "logo"
+  | "nutrition"
+  | "barcode"
+  | "barcodeImage"
+  | "image"
+  | "text";
+export type PlacedElement = {
+  id: string;
+  kind: PlacedElementKind;
+  /** Coin supérieur gauche sur l'étiquette, en mm. */
+  x: number;
+  y: number;
+  widthMm: number;
+  /** Rotation dans le sens horaire : 0, 90, 180 ou 270 degrés. */
+  rotation: number;
+  /** Image téléversée (kinds `image` et `barcodeImage`), data URL. */
+  image: string;
+  imageRatio: number;
+  /** Bloc de texte libre (kind `text`). */
+  text: string;
+  fontSizeMm: number;
+  bold: boolean;
+  /** Couleur du texte, `#rrggbb` ; vide = noir du thème. */
+  colour: string;
+  align: "left" | "center" | "right";
 };
 export type LabelConfig = {
   version: 1;
@@ -69,6 +106,17 @@ export type LabelConfig = {
   gs1Confirmed: boolean;
   textReviewed: boolean;
   quebec: QuebecReview;
+  /** Couleur de fond de l'étiquette (`#rrggbb`) ; vide = fond du thème. */
+  background: string;
+  /** Image de fond téléversée, posée sur toute l'étiquette ; vide = aucune. */
+  backgroundImage: string;
+  backgroundRatio: number;
+  /**
+   * Éléments du studio visuel. Vide = disposition automatique historique.
+   * Dès qu'il y a un élément, le canevas libre fait foi : seuls ces
+   * éléments sont dessinés (plus le fond), aux positions sauvegardées.
+   */
+  elements: PlacedElement[];
 };
 export type LabelProduct = {
   id: string;
@@ -118,6 +166,10 @@ export function defaultLabelConfig(brand = ""): LabelConfig {
     gs1Confirmed: false,
     textReviewed: false,
     quebec: defaultQuebecReview(/miel\s*aissa/i.test(brand)),
+    background: "",
+    backgroundImage: "",
+    backgroundRatio: 1,
+    elements: [],
   };
 }
 export function labelConfigInput(value: unknown): LabelConfig {
@@ -350,7 +402,132 @@ export function labelConfigInput(value: unknown): LabelConfig {
     b.quebec,
     /miel\s*aissa/i.test(result.brand),
   );
+  result.background = placedColour(b.background ?? "", "background");
+  result.backgroundImage = placedImage(
+    b.backgroundImage ?? "",
+    "L’image de fond doit être un PNG/JPEG de 300 Ko maximum.",
+  );
+  result.backgroundRatio = placedRatio(b.backgroundRatio ?? 1, "backgroundRatio");
+  result.elements = placedElementsInput(b.elements ?? []);
   return result;
+}
+const HEX_COLOUR = /^#[0-9a-fA-F]{6}$/;
+const DATA_IMAGE = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/;
+function placedColour(value: unknown, name: string): string {
+  if (typeof value !== "string" || (value !== "" && !HEX_COLOUR.test(value)))
+    throw new ServiceError(
+      "invalid_input",
+      `La couleur ${name} doit être au format #rrggbb.`,
+    );
+  return value;
+}
+function placedImage(value: unknown, message: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 450000 ||
+    (value !== "" && !DATA_IMAGE.test(value))
+  )
+    throw new ServiceError("invalid_input", message);
+  return value;
+}
+function placedRatio(value: unknown, name: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0.1 ||
+    value > 10
+  )
+    throw new ServiceError(
+      "invalid_input",
+      `Les proportions ${name} ne sont pas prises en charge.`,
+    );
+  return value;
+}
+function placedNumber(
+  value: unknown,
+  name: string,
+  min: number,
+  max: number,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < min ||
+    value > max
+  )
+    throw new ServiceError(
+      "invalid_input",
+      `${name} doit être compris entre ${min} et ${max}.`,
+    );
+  return Math.round(value * 10) / 10;
+}
+export const PLACED_ELEMENT_KINDS: PlacedElementKind[] = [
+  "logo",
+  "nutrition",
+  "barcode",
+  "barcodeImage",
+  "image",
+  "text",
+];
+function placedElementsInput(value: unknown): PlacedElement[] {
+  if (!Array.isArray(value) || value.length > 40)
+    throw new ServiceError(
+      "invalid_input",
+      "Les éléments du studio sont invalides (40 maximum).",
+    );
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry))
+      throw new ServiceError("invalid_input", "Élément du studio invalide.");
+    const e = entry as Record<string, unknown>;
+    if (
+      typeof e.id !== "string" ||
+      !/^[a-zA-Z0-9-]{1,40}$/.test(e.id) ||
+      !PLACED_ELEMENT_KINDS.includes(e.kind as PlacedElementKind)
+    )
+      throw new ServiceError("invalid_input", "Élément du studio invalide.");
+    const rotation = e.rotation ?? 0;
+    if (![0, 90, 180, 270].includes(rotation as number))
+      throw new ServiceError(
+        "invalid_input",
+        "La rotation d’un élément doit être 0, 90, 180 ou 270 degrés.",
+      );
+    const text = e.text ?? "";
+    if (
+      typeof text !== "string" ||
+      text.length > 1500 ||
+      /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)
+    )
+      throw new ServiceError(
+        "invalid_input",
+        "Le texte d’un élément doit contenir au plus 1 500 caractères.",
+      );
+    const align = e.align ?? "left";
+    if (!["left", "center", "right"].includes(String(align)))
+      throw new ServiceError("invalid_input", "Alignement d’élément invalide.");
+    return {
+      id: e.id,
+      kind: e.kind as PlacedElementKind,
+      x: placedNumber(e.x ?? 0, "La position horizontale d’un élément", 0, 400),
+      y: placedNumber(e.y ?? 0, "La position verticale d’un élément", 0, 400),
+      widthMm: placedNumber(e.widthMm ?? 30, "La largeur d’un élément", 5, 400),
+      rotation: rotation as number,
+      image: placedImage(
+        e.image ?? "",
+        "L’image d’un élément doit être un PNG/JPEG de 300 Ko maximum.",
+      ),
+      imageRatio: placedRatio(e.imageRatio ?? 1, "imageRatio"),
+      text: text.trim(),
+      fontSizeMm: placedNumber(
+        e.fontSizeMm ?? 3.5,
+        "La taille du texte d’un élément",
+        2,
+        12,
+      ),
+      bold: e.bold === true,
+      colour: placedColour(e.colour ?? "", "colour"),
+      align: align as PlacedElement["align"],
+    };
+  });
 }
 export function readLabelConfig(value: unknown, brand = ""): LabelConfig {
   if (!value) return defaultLabelConfig(brand);
@@ -372,6 +549,12 @@ export function barcodeMatchesScan(
       code.padStart(13, "0") === product.gtin.padStart(13, "0"))
   );
 }
+/**
+ * Points à vérifier (facultatif). Depuis l'ordre du propriétaire du
+ * 2026-11-27, cette liste est un rappel seulement : elle ne bloque ni la
+ * sauvegarde, ni l'aperçu, ni l'export, ni l'impression, et il n'existe
+ * aucun mécanisme de contournement. Le studio l'affiche pour mémoire.
+ */
 export function labelReadiness(
   product: LabelProduct,
   config: LabelConfig,

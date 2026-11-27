@@ -223,7 +223,7 @@ test("complete form flow: session, server save, reload, vector PDF and scanner",
   dom.window.close();
 });
 
-test("logo visible, preset miel et override du directeur consigné", async () => {
+test("logo visible, preset miel et points à vérifier facultatifs", async () => {
   const { JSDOM } = await import("jsdom");
   const env = fixture();
   let cookie = `__Host-label_session=${env.mintSession("qa-owner")}`;
@@ -274,8 +274,9 @@ test("logo visible, preset miel et override du directeur consigné", async () =>
   // Le champ logo est là dès l'ouverture (section 1), outils masqués sans logo.
   assert.ok(d.querySelector("#logo-file"));
   assert.equal(d.querySelector("#logo-tools").hidden, true);
-  // Le compte atelier est le directeur : ses réglages sont visibles.
-  assert.equal(d.querySelector("#admin-settings").hidden, false);
+  // Les réglages du directeur (code maître) ont disparu avec le mécanisme
+  // de contournement (ordre du propriétaire, 2026-11-27).
+  assert.equal(d.querySelector("#admin-settings"), null);
   // Preset miel : on repart d'ingrédients libres, puis on coche le preset.
   const hp = d.querySelector("#honeyPreset");
   hp.checked = false;
@@ -291,7 +292,8 @@ test("logo visible, preset miel et override du directeur consigné", async () =>
   );
   assert.equal(d.querySelector("#noBestBefore").checked, true);
   await wait(() => d.querySelector("#bestBefore").disabled === true);
-  // Sauvegarde, puis override du directeur avec note écrite.
+  // Sauvegarde : aucun prérequis ne bloque, le panneau ne propose que
+  // des points à vérifier facultatifs, sans aucun contournement.
   d.querySelector("#size").value = "250 g";
   d.querySelector("#size").dispatchEvent(
     new w.Event("input", { bubbles: true }),
@@ -300,18 +302,12 @@ test("logo visible, preset miel et override du directeur consigné", async () =>
   await wait(() =>
     d.querySelector("#messages").textContent.includes("sauvegardée"),
   );
-  await wait(() => d.querySelector("#overrides [data-override]"));
-  const row = d.querySelector("#overrides [data-row]");
-  row.querySelector("[data-note]").value = "Note de test du directeur";
-  row.querySelector("[data-override]").click();
-  await wait(() =>
-    d.querySelector("#overrides").textContent.includes("contournés"),
-  );
   assert.match(
     d.querySelector("#overrides").textContent,
-    /Note de test du directeur/,
+    /Points à vérifier \(facultatif\)/,
   );
-  assert.match(d.querySelector("#overrides").textContent, /directeur/);
+  assert.equal(d.querySelector("#overrides [data-override]"), null);
+  assert.equal(d.querySelector("#pdf").disabled, false);
   // Logo posé par l'API (le même payload que le formulaire enverrait) :
   // il doit survivre à la sauvegarde et apparaître dans l'aperçu.
   const { labels } = await (await w.fetch("/api/labels")).json();
@@ -360,5 +356,107 @@ test("logo visible, preset miel et override du directeur consigné", async () =>
   assert.ok(
     !d.querySelector("#preview svg").textContent.includes("Meilleur avant"),
   );
+  dom.window.close();
+});
+
+test("studio libre : mode libre, fond, sauvegarde des positions, relecture et PDF", async () => {
+  const { JSDOM } = await import("jsdom");
+  const env = fixture();
+  let cookie = `__Host-label_session=${env.mintSession("qa-owner")}`,
+    download;
+  const create = () => {
+    const dom = new JSDOM(
+      readFileSync(new URL("../index.html", import.meta.url), "utf8"),
+      { url: "https://labels.test", runScripts: "outside-only" },
+    );
+    const w = dom.window;
+    w.TextEncoder = TextEncoder;
+    w.TextDecoder = TextDecoder;
+    w.Blob = Blob;
+    w.URL.createObjectURL = (b) => {
+      download = b;
+      return "blob:qa";
+    };
+    w.URL.revokeObjectURL = () => {};
+    w.HTMLAnchorElement.prototype.click = function () {};
+    w.fetch = async (path, opts = {}) => {
+      const res = await worker.fetch(
+        new Request("https://labels.test" + path, {
+          ...opts,
+          headers: {
+            ...opts.headers,
+            Origin: "https://labels.test",
+            "oai-authenticated-user-id": "qa-owner",
+            Cookie: cookie,
+          },
+        }),
+        env,
+      );
+      if (res.headers.has("Set-Cookie"))
+        cookie = res.headers.get("Set-Cookie").split(";")[0];
+      return res;
+    };
+    w.eval(readFileSync(new URL("../dist/client.js", import.meta.url), "utf8"));
+    return dom;
+  };
+  const wait = async (fn) => {
+    for (let i = 0; i < 200; i++) {
+      if (fn()) return;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw Error("UI condition timed out");
+  };
+  let dom = create(),
+    w = dom.window,
+    d = w.document;
+  await wait(
+    () => !d.querySelector("#app").hidden && d.querySelector("#preview svg"),
+  );
+  // Passage en mode libre : les éléments du modèle sont posés sur le
+  // canevas, chacun dans un groupe déplaçable.
+  d.querySelector("#free-mode").click();
+  await wait(() => d.querySelector("#preview svg [data-el]"));
+  assert.equal(d.querySelector("#free-tools").hidden, false);
+  assert.ok(d.querySelectorAll("#preview svg [data-el]").length >= 4);
+  // Fond de couleur choisi par l'utilisateur.
+  const bg = d.querySelector("#bg-colour");
+  bg.value = "#102030";
+  bg.dispatchEvent(new w.Event("input", { bubbles: true }));
+  await wait(() => d.querySelector('#preview svg rect[fill="#102030"]'));
+  // Sauvegarde sans poids net saisi et sans aucune vérification complétée :
+  // rien ne bloque, les positions partent avec le modèle.
+  d.querySelector("#save").click();
+  await wait(() =>
+    d.querySelector("#messages").textContent.includes("sauvegardée"),
+  );
+  const { labels } = await (await w.fetch("/api/labels")).json();
+  assert.equal(labels.length, 1);
+  const savedConfig = labels[0].payload.config;
+  assert.equal(savedConfig.background, "#102030");
+  assert.ok(savedConfig.elements.length >= 4);
+  const barcodeEl = savedConfig.elements.find((e) => e.kind === "barcode");
+  assert.ok(barcodeEl);
+  assert.equal(typeof barcodeEl.x, "number");
+  assert.equal(typeof barcodeEl.y, "number");
+  // Le PDF se produit depuis le canevas libre.
+  d.querySelector("#pdf").click();
+  await wait(() => !!download);
+  assert.equal((await download.text()).slice(0, 4), "%PDF");
+  dom.window.close();
+  // Relecture après rechargement : le modèle revient en mode libre, avec
+  // ses éléments déplaçables et son fond.
+  dom = create();
+  w = dom.window;
+  d = w.document;
+  await wait(
+    () =>
+      !d.querySelector("#app").hidden &&
+      d.querySelector("#saved").options.length === 2,
+  );
+  d.querySelector("#saved").selectedIndex = 1;
+  d.querySelector("#saved").dispatchEvent(new w.Event("change"));
+  await wait(() => d.querySelector("#preview svg [data-el]"));
+  assert.equal(d.querySelector("#free-tools").hidden, false);
+  assert.ok(d.querySelector('#preview svg rect[fill="#102030"]'));
   dom.window.close();
 });

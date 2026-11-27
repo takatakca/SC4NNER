@@ -9,7 +9,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const MAX_BODY_BYTES = 700_000;
+// 4,5 Mo : un modèle du studio visuel peut porter plusieurs images
+// téléversées (logo, affiche nutritive, fond, code-barres en image).
+const MAX_BODY_BYTES = 4_500_000;
 
 /** Ouvre la base et applique les migrations de `drizzle/` une seule fois chacune. */
 export function openDatabase(path) {

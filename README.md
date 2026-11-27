@@ -13,12 +13,18 @@ Le studio a été bâti le 2026-10-20 dans `takatakca/takatak-v1` (PR #218, fusi
 ## Ce que fait l'app
 
 1. **Votre produit** : marque, nom français, format, ingrédients, entreprise, origine, lot, date.
-2. **Votre code-barres** : SKU interne en Code 39, ou UPC / EAN de détail (chiffre de contrôle vérifié). Orientation en échelle pour les pots, résolution 203, 300 ou 600 points par pouce.
+2. **Votre code-barres** : SKU interne en Code 39, ou UPC / EAN de détail — saisi avec ou sans le chiffre de contrôle, qui est calculé ou vérifié (GS1 mod-10). Orientation en échelle pour les pots, résolution 203, 300 ou 600 points par pouce. Le code-barres ou le code QR déjà créé par GS1 peut aussi être téléversé comme image.
 3. **Format du pot** : pot rond ou hexagonal. En hexagonal, l'app vérifie que le code-barres tient sur une face plate mesurée et bloque le PDF sinon.
-4. **Mentions alimentaires et dossier Québec** : catégorie, couleur, conservation, tableau de valeur nutritive (image approuvée ou exemption notée), rappels sourcés des exigences.
-5. **Aperçu et impression** : PDF vectoriel à la taille exacte, bandeau « épreuve » tant que la liste de contrôle n'est pas complète.
-6. **Sauvegarde** : jusqu'à 200 modèles par espace, gardés sur le serveur.
-7. **Essai de lecture** : on scanne l'étiquette imprimée, l'app dit si le code lu est le bon.
+4. **Mentions alimentaires et dossier Québec** : catégorie, couleur, conservation, tableau de valeur nutritive (image approuvée ou exemption notée), rappels sourcés des exigences. Depuis l'ordre du propriétaire du 2026-11-27, ce sont des **points à vérifier facultatifs** : ils ne bloquent ni la sauvegarde, ni l'aperçu, ni le PDF — aucun contournement, aucun code maître.
+5. **Studio libre** : chaque élément de l'étiquette — textes, logo, images téléversées, affiche nutritive, code-barres généré ou en image — se pose sur le canevas et se glisse au doigt ou à la souris, se redimensionne et se tourne ; fond de couleur ou image de fond au choix. Les positions sont sauvegardées avec le modèle et respectées dans l'aperçu et le PDF.
+6. **Aperçu et impression** : PDF vectoriel à la taille exacte, sans bandeau « épreuve ».
+7. **Sauvegarde** : jusqu'à 200 modèles par espace, gardés sur le serveur.
+8. **Essai de lecture** : on scanne l'étiquette imprimée, l'app dit si le code lu est le bon.
+
+## Ce qui est vérifié (2026-11-27, en local, Node 24)
+
+- Studio libre, retrait des vérifications obligatoires et GS1 durci (branche `taktak/studio-visuel-canva`) : `npm run typecheck`, `npm run build`, `npm test` : 24 tests sur 24 — dont 5 tests unitaires du moteur (chiffre de contrôle GS1 sur des numéros connus, zones de silence, SVG, éléments posés, rotation), le flux studio complet dans un navigateur simulé (mode libre, fond personnalisé, sauvegarde des positions, relecture, PDF) et la disparition des endpoints de contournement côté serveur.
+- Le glisser-déposer a aussi été exercé en navigateur simulé avec coordonnées : un code-barres glissé de (+10 mm, +5 mm) est sauvegardé à sa nouvelle position. Le geste au doigt sur un vrai téléphone reste à essayer par le propriétaire après déploiement.
 
 ## Ce qui est vérifié (2026-11-12, en local, Node 22)
 

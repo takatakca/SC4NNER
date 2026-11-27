@@ -28,9 +28,11 @@ The board is public: no secrets, codes, personal or tax data.
 
 - **Public repository:** never commit secrets, tokens, `.env` values, passwords or their hashes, customer data.
 - **Nothing invented on a label.** No made-up nutrition values, recipe, origin, harvest proof, GS1 / UPC / EAN number,
-  grade, certification or exemption. Missing facts stay empty and the label stays a draft.
+  grade, certification or exemption. Missing facts stay empty.
 - **No compliance claim.** The app records checks the user declares. It never certifies a label, and no agent writes
-  that it does. The draft banner stays until the owner's checklist is complete.
+  that it does. On the owner's order of 2026-11-27 (« Enlever vérification obligatoire »), the checks are optional
+  reminders only: they never block saving, preview, PDF or printing, and there is no draft banner, no override and
+  no master code. Do not reintroduce a blocking gate.
 - **Not verified means say so.** No printer, scanner or finished jar has been tested until the owner reports it.
   A green build is not a deployment; a deployment is not a print test.
 - **The label engine in `src/` is the same code as `takatak-v1/src/lib/inventory`** (only import paths differ).

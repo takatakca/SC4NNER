@@ -2,6 +2,8 @@ import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
 import {
   POINTS_PER_MM as P,
   planLabelPages,
+  rotatedAnchor,
+  rotatePointCw,
   type LabelPaper,
   type LabelScene,
 } from "./label-layout";
@@ -34,11 +36,57 @@ export async function labelPdf(
       const image = element.data.startsWith("data:image/png")
         ? await artwork.embedPng(element.data)
         : await artwork.embedJpg(element.data);
-      page.drawImage(image, {
-        x: element.x * P,
-        y: (scene.height - element.y - element.height) * P,
-        width: element.width * P,
-        height: element.height * P,
+      if (element.rotation) {
+        // Rotation autour du centre de l'élément, comme dans l'aperçu.
+        const w = element.width * P,
+          h = element.height * P;
+        const anchor = rotatedAnchor(
+          (element.x + element.width / 2) * P,
+          (scene.height - element.y - element.height / 2) * P,
+          w,
+          h,
+          element.rotation,
+        );
+        page.drawImage(image, {
+          x: anchor.x,
+          y: anchor.y,
+          width: w,
+          height: h,
+          rotate: degrees(anchor.pdfDeg),
+        });
+      } else
+        page.drawImage(image, {
+          x: element.x * P,
+          y: (scene.height - element.y - element.height) * P,
+          width: element.width * P,
+          height: element.height * P,
+        });
+    }
+    if (element.kind === "textblock") {
+      // Bloc de texte libre du studio visuel : chaque ligne tourne autour
+      // du centre du bloc, comme dans l'aperçu.
+      const cx = (element.x + element.width / 2) * P;
+      const cy = (scene.height - element.y - element.height / 2) * P;
+      element.lines.forEach((line, i) => {
+        let px = (element.x + line.dx) * P;
+        let py =
+          (scene.height - (element.y + element.size + i * element.lineHeight)) *
+          P;
+        let rot = 0;
+        if (element.rotation) {
+          const p = rotatePointCw(cx, cy, px, py, element.rotation);
+          px = p.x;
+          py = p.y;
+          rot = -element.rotation;
+        }
+        page.drawText(line.text.normalize("NFC"), {
+          x: px,
+          y: py,
+          size: element.size * P,
+          font: element.bold ? bold : normal,
+          color: colour(element.colour),
+          rotate: degrees(rot),
+        });
       });
     }
     if (element.kind === "rect")
